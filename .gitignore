@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.error
+.local/
+gpui-kit.d.ts
+herdr.d.ts
+jsconfig.json
