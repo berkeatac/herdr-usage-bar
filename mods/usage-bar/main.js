@@ -1,7 +1,7 @@
 import { View, div, svg } from "gpui-kit";
 import { Button, Checkbox, h_flex, v_flex } from "gpui-base";
 import { appHome, exec, theme, props, openOverlay, closeOverlay,
-  shared, setShared, nextCommand } from "herdr";
+  shared, setShared, nextCommand, spaces, agents, run, window } from "herdr";
 
 const NAMES = { codex: "Codex", claude: "Claude", cursor: "Cursor" };
 const ORDER = ["codex", "claude", "cursor"];
@@ -254,6 +254,7 @@ export default class UsageBar extends View {
     if (this.detail) return this.details();
     const t = theme();
     const compact = this.width < 700;
+    const workspaceStatus = Boolean(props()?.workspaceStatus);
     return h_flex().id("usage-bar").size_full().items_center().px(6).gap(2)
       .bg(t.chrome).border_t(1).border_color(t.border).text_size(11.5)
       .on_size_change((size, cx) => {
@@ -264,7 +265,8 @@ export default class UsageBar extends View {
         .child(svg("mods/usage-bar/tokens.svg").size(14))
         .accessibility_label("Choose usage providers").tooltip("Choose which providers to display")
         .on_click(() => openOverlay({ mod: "usage-bar", props: { settings: true }, kind: "popup", width: 310, height: 275 })))
-      .child(h_flex().id("usage-providers").items_center().gap(2).flex_1().overflow_x_scroll()
+      .child(h_flex().id("usage-providers").items_center().gap(2).min_w(0).overflow_x_scroll()
+        .when(!workspaceStatus, el => el.flex_1())
         .children(enabledProviders().map(provider => this.chip(provider, compact, t)))
         .when(enabledProviders().length === 0, el => el.child(div().text_color(t.dim).px(6).child("Choose providers")))
         .child(Button.new("refresh-usage").px(8).h(24).flex_shrink_0().rounded(4).cursor_pointer()
@@ -272,6 +274,26 @@ export default class UsageBar extends View {
           .accessibility_label("Refresh usage for Codex, Claude and Cursor")
           .tooltip("Refresh usage · automatic refresh every 2 minutes")
           .on_click((_event, cx) => this.refreshAll(cx))))
-      .when(this.width > 760, el => el.child(div().px(8).text_color(t.dim).child("quota used")));
+      .when(workspaceStatus, el => el.child(this.workspaceStatus(t)))
+      .when(!workspaceStatus && this.width > 760, el => el.child(div().px(8).text_color(t.dim).child("quota used")));
+  }
+
+  workspaceStatus(t) {
+    const space = spaces().find(item => item.active);
+    const list = agents();
+    const needs = list.filter(agent => agent.status === "blocked").length;
+    const label = (icon, text) => h_flex().gap(6).items_center().flex_shrink_0()
+      .child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
+    return h_flex().id("usage-workspace-status").flex_1().min_w(0).pl(10).pr(8).gap(16)
+      .items_center().text_size(11.8).text_color(t.muted)
+      .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
+      .when(Boolean(space?.branch), el => el.child(label("branch", space.branch)))
+      .child(h_flex().gap(6).items_center().flex_shrink_0()
+        .child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
+        .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
+      .child(div().flex_1())
+      .when(this.width > 900, el => el.child(Button.new("usage-commands").text_color(t.dim)
+        .on_click(() => run("app.palette"))
+        .child(`${window()?.platform === "macos" ? "⌘" : "Ctrl"} Shift P  commands`)));
   }
 }
