@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install Usage Bar into a personal copy of the current layout; never publish."""
+"""Install Usage Bar into a personal copy of the current layout."""
 import json
 import os
 from pathlib import Path

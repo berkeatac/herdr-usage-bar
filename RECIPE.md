@@ -52,7 +52,7 @@ Codex credit fields were checked against the [official Codex backend mapping](ht
 
 One local account per provider is supported, even while viewing remote terminals. Custom proxies, browser database import, automatic token renewal, API-only quotas, Cursor legacy/team pools, spending and all-time totals are not implemented. Windows is unsupported; Keychain and clipboard connection are macOS-specific. A stored browser session is an explicit override and may need replacing when it expires. Remove `data/usage-bar/cursor-session.json` to forget it and return to automatic source selection. Never include that file in the sharing package.
 
-The native bar, picker toggles, live Codex/Cursor usage, reset countdowns and the connected Cursor popup were visually checked. Claude readings still require a usable sign-in. `herdr-app check` was attempted but timed out initializing macOS window services in the agent sandbox; no passing native check is claimed. Publishing remains deferred until the owner has tested and explicitly requests it.
+The native bar, picker toggles, live Codex/Cursor usage, reset countdowns and the connected Cursor popup were visually checked. Claude readings still require a usable sign-in. `herdr-app check` was attempted but timed out initializing macOS window services in the agent sandbox; no passing native check is claimed. The owner has requested publication; native validation remains pending as described above.
 
 ## Done when
 
@@ -62,4 +62,4 @@ The native bar, picker toggles, live Codex/Cursor usage, reset countdowns and th
 - Refresh stays adjacent to the provider group. Theme changes and narrow allocations remain usable.
 - Codex matches its live usage; with usable sign-ins Claude/Cursor show their corresponding windows and resets. Failures display a specific reason and next step without guessing account status.
 - The clipboard action validates and privately saves only a usable Cursor session; normal polling never reads the clipboard or prompts Keychain.
-- The package contains the mod, brief and real preview, with no layout directory, credentials or full-window capture. Nothing is pushed during local testing.
+- The package contains the mod, brief and real preview, with no layout directory, credentials or full-window capture. Public sharing uses the herdr-mod repository topic.
