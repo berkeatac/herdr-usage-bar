@@ -147,12 +147,12 @@ export default class UsageBar extends View {
         if (this.width !== size.width) { this.width = size.width; cx.notify(); }
       })
       .child(h_flex().id("usage-providers").items_center().gap(2).flex_1().overflow_x_scroll()
-        .children(ORDER.map(provider => this.chip(provider, compact, t))))
-      .when(this.width > 760, el => el.child(div().px(8).text_color(t.dim).child("quota used")))
-      .child(Button.new("refresh-usage").px(8).h(24).flex_shrink_0().rounded(4).cursor_pointer()
-        .text_color(t.muted).hover(s => s.bg(t.raised)).child("↻")
-        .accessibility_label("Refresh usage for Codex, Claude and Cursor")
-        .tooltip("Refresh usage · automatic refresh every 2 minutes")
-        .on_click((_event, cx) => this.refreshAll(cx)));
+        .children(ORDER.map(provider => this.chip(provider, compact, t)))
+        .child(Button.new("refresh-usage").px(8).h(24).flex_shrink_0().rounded(4).cursor_pointer()
+          .text_color(t.muted).hover(s => s.bg(t.raised)).child("↻")
+          .accessibility_label("Refresh usage for Codex, Claude and Cursor")
+          .tooltip("Refresh usage · automatic refresh every 2 minutes")
+          .on_click((_event, cx) => this.refreshAll(cx))))
+      .when(this.width > 760, el => el.child(div().px(8).text_color(t.dim).child("quota used")));
   }
 }
