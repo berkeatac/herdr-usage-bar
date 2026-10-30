@@ -55,6 +55,34 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(collector.parse_cursor({"isUnlimited": True}), [])
         self.assertEqual(collector.parse_cursor({"individualUsage": {"plan": {"used": 0, "limit": 0}}}), [])
 
+    def test_cursor_shows_auto_and_other_models_separately(self):
+        result = collector.parse_cursor({
+            "billingCycleEnd": "2026-11-02T16:47:51.000Z",
+            "individualUsage": {"plan": {
+                "totalPercentUsed": 16.3, "used": 10, "limit": 20,
+                "autoPercentUsed": 12.5, "apiPercentUsed": 0,
+            }},
+        })
+        self.assertEqual([(w["label"], w["used"]) for w in result], [("Auto", 12.5), ("Other", 0)])
+        self.assertEqual(result[0]["reset"], "2026-11-02T16:47:51.000Z")
+
+    def test_cursor_current_period_overrides_stale_summary(self):
+        result = collector.parse_cursor(
+            {"billingCycleEnd": "2026-11-01T00:00:00.000Z",
+             "individualUsage": {"plan": {"autoPercentUsed": 0, "apiPercentUsed": 0, "totalPercentUsed": 100}}},
+            {"billingCycleEnd": "1792664856178",
+             "planUsage": {"autoPercentUsed": 10.2, "apiPercentUsed": 1.5, "totalPercentUsed": 10.2}},
+        )
+        self.assertEqual([(w["label"], w["used"]) for w in result], [("Auto", 10.2), ("Other", 1.5)])
+        self.assertEqual(result[0]["reset"], 1792664856.178)
+
+    def test_cursor_invalid_pool_falls_back_per_field(self):
+        result = collector.parse_cursor(
+            {"individualUsage": {"plan": {"autoPercentUsed": 4, "apiPercentUsed": 2}}},
+            {"planUsage": {"autoPercentUsed": "nope", "apiPercentUsed": 9}},
+        )
+        self.assertEqual([(w["label"], w["used"]) for w in result], [("Auto", 4), ("Other", 9)])
+
     def test_invalid_numbers_are_unavailable(self):
         for bad in [None, "45", True, -1, float("nan"), float("inf")]:
             self.assertIsNone(collector.window("Total", bad))

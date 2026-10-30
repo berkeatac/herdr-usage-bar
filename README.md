@@ -2,12 +2,12 @@
 
 Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 
-![Usage Bar showing Codex current and weekly usage alongside Cursor Total](preview.png)
+![Usage Bar showing Codex current and weekly usage alongside Cursor Auto and other models](preview.png)
 
 ## Features
 
 - **Choose providers:** click the token icon to show or hide Codex, Claude and Cursor. Your choices are saved; hidden providers stop polling.
-- **Usage at a glance:** current and weekly windows for Codex and Claude, and Cursor’s included billing-cycle Total. Percentages show quota **used**.
+- **Usage at a glance:** current and weekly windows for Codex and Claude, and Cursor’s Auto and other-model usage for the billing cycle. Percentages show quota **used**.
 - **Optional countdowns:** each provider popup has a **Show countdowns in bar** checkbox. Enable or remove countdowns independently for each provider. Codex/Claude default on; Cursor defaults off.
 - **Reset details:** see remaining time such as `2h 15m` or `3d 12h`, plus the exact reset timestamp in the popup. Countdowns update every minute without extra API calls.
 - **Codex credits:** the Codex popup shows remaining additional usage credits, including zero, unlimited credits and unavailable balances, separately from rolling plan limits.

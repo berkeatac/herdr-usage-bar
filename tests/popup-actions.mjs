@@ -93,7 +93,7 @@ popup.details();
 assert.equal(controls.has("copied-session"), false, "connected Cursor must hide the browser login section");
 assert.equal(controls.has("connect-provider"), false, "connected providers must hide Keychain retry");
 bar.open("cursor");
-assert.equal(overlays.at(-1).height, 320, "connected Cursor should use a compact popup");
+assert.equal(overlays.at(-1).height, 440, "connected Cursor should fit Auto and other models");
 snapshots.get("usage-bar.snapshot").cursor = { provider: "cursor", windows: [], error: "missing login" };
 controls.clear();
 popup.details();

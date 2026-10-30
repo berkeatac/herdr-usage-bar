@@ -50,8 +50,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise Unavailable("Usage endpoint redirected; provider integration needs an update.")
 
 
-def request(url, headers):
-    req = urllib.request.Request(url, headers={"User-Agent": "HerdrUsageBar/1.0", **headers})
+def request(url, headers, body=None):
+    payload = None
+    sent = {"User-Agent": "HerdrUsageBar/1.0", **headers}
+    if body is not None:
+        payload = json.dumps(body).encode()
+        sent.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=payload, headers=sent)
     try:
         with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as response:
             result = json.loads(response.read(1024 * 1024))
@@ -311,32 +316,86 @@ def save_copied_session():
     return data
 
 
-def parse_cursor(data):
-    plan = (data.get("individualUsage") or {}).get("plan") or {}
+def cycle_end(value):
+    """Normalize a billing-cycle end to unix seconds, or leave an ISO timestamp."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            value = int(text)
+        else:
+            return text
+    n = number(value)
+    if n is None:
+        return None
+    return n / 1000 if n >= 1_000_000_000_000 else n
+
+
+def pool_percent(primary, fallback, key):
+    if isinstance(primary, dict) and key in primary and number(primary.get(key)) is not None:
+        return primary.get(key)
+    if isinstance(fallback, dict) and key in fallback and number(fallback.get(key)) is not None:
+        return fallback.get(key)
+    return None
+
+
+def parse_cursor(data, current=None):
+    summary = data if isinstance(data, dict) else {}
+    current = current if isinstance(current, dict) else {}
+    plan_usage = current.get("planUsage") if isinstance(current.get("planUsage"), dict) else {}
+    plan = (summary.get("individualUsage") or {}).get("plan") or {}
+    if not isinstance(plan, dict):
+        plan = {}
+    if plan.get("enabled") is False and not plan_usage:
+        return []
+    reset = cycle_end(current.get("billingCycleEnd")) or cycle_end(summary.get("billingCycleEnd"))
+    windows = []
+    for label, key in (("Auto", "autoPercentUsed"), ("Other", "apiPercentUsed")):
+        w = window(label, pool_percent(plan_usage, plan, key), reset)
+        if w:
+            windows.append(w)
+    if windows:
+        return windows
     if plan.get("enabled") is False:
         return []
-    percent = number(plan.get("totalPercentUsed"))
+    percent = number(plan_usage.get("totalPercentUsed"))
+    if percent is None:
+        percent = number(plan.get("totalPercentUsed"))
     if percent is None:
         used, limit = number(plan.get("used")), number(plan.get("limit"))
         if used is not None and limit is not None and limit > 0:
             percent = used / limit * 100
-    w = window("Total", percent, data.get("billingCycleEnd"))
+    w = window("Total", percent, reset)
     return [w] if w else []
+
+
+def cursor_usage(cookie):
+    headers = {"Cookie": "WorkosCursorSessionToken=" + cookie}
+    summary = request("https://cursor.com/api/usage-summary", headers)
+    # The dashboard's current period is the live Auto / other-model split.
+    # usage-summary can report a stale combined total for the same account.
+    current = None
+    try:
+        current = request("https://cursor.com/api/dashboard/get-current-period-usage",
+                          {**headers, "Origin": "https://cursor.com"}, {})
+    except Unavailable:
+        current = None
+    return parse_cursor(summary, current)
 
 
 def cursor(allow_prompt=False):
     saved = load_json(session_path()).get("cookie")
     if saved:
-        return parse_cursor(request("https://cursor.com/api/usage-summary",
-            {"Cookie": "WorkosCursorSessionToken=" + cursor_cookie(saved)}))
-    return parse_cursor(request("https://cursor.com/api/usage-summary",
-        {"Cookie": "WorkosCursorSessionToken=" + cursor_token(allow_prompt)}))
+        return cursor_usage(cursor_cookie(saved))
+    return cursor_usage(cursor_token(allow_prompt))
 
 
 def collect(provider, allow_prompt=False, copied_session=False):
     try:
-        reading = (parse_cursor(save_copied_session()) if copied_session and provider == "cursor" else
-                   {"codex": codex, "claude": claude, "cursor": cursor}[provider](allow_prompt))
+        if copied_session and provider == "cursor":
+            save_copied_session()
+        reading = {"codex": codex, "claude": claude, "cursor": cursor}[provider](allow_prompt)
         windows = reading.get("windows", []) if isinstance(reading, dict) else reading
         credits = reading.get("credits") if isinstance(reading, dict) else None
         if not windows and credits is None:

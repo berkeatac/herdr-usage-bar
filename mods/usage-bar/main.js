@@ -57,6 +57,13 @@ function usageColor(n, t) {
   return n >= 95 ? t.blocked : n >= 75 ? t.working : t.foreground;
 }
 
+function windowName(label) {
+  if (label === "7d") return "Weekly · 7 days";
+  if (label === "5h") return "Current · 5 hours";
+  if (label === "Other") return "Other models";
+  return label;
+}
+
 function control(id, text, action, t) {
   return Button.new(id).px(10).py(6).rounded(5).cursor_pointer()
     .text_color(t.foreground).bg(t.surface).hover(s => s.bg(t.raised))
@@ -120,7 +127,7 @@ export default class UsageBar extends View {
   open(provider) {
     const connected = Boolean(shared(SNAPSHOT)?.[provider]?.windows?.length);
     openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 480,
-      height: provider === "cursor" ? (connected ? 320 : 500) : provider === "codex" ? 450 : 380 });
+      height: provider === "cursor" ? (connected ? 440 : 500) : provider === "codex" ? 450 : 380 });
   }
 
   picker() {
@@ -181,14 +188,14 @@ export default class UsageBar extends View {
         .child(div().text_size(16).font_semibold().child(`${NAMES[provider]} usage`))
         .child(control("close", "Close", () => closeOverlay(props().overlay), t)))
       .child(div().text_color(t.muted).child(provider === "cursor"
-        ? "Total is included plan usage for this billing cycle."
+        ? "Auto is included Cursor-model usage. Other is named-model usage. Both are quota used for this billing cycle."
         : "Percentages show quota used in each rolling window."));
     if (connected) {
       for (const w of record.windows) {
         const remaining = resetCountdown(w.reset);
         body.child(v_flex().gap(5)
           .child(h_flex().justify_between()
-            .child(div().child(w.label === "7d" ? "Weekly · 7 days" : w.label === "5h" ? "Current · 5 hours" : w.label))
+            .child(div().child(windowName(w.label)))
             .child(div().font_semibold().text_color(usageColor(w.used, t)).child(`${percent(w.used)} used`)))
           .child(div().h(4).w_full().rounded(2).bg(t.border)
             .child(div().h(4).w(395 * Math.min(100, w.used) / 100).rounded(2).bg(usageColor(w.used, t))))
