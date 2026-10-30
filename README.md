@@ -4,13 +4,13 @@ Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 
 ![Usage Bar](preview.png)
 
-Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
+Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. The bar shows reset countdowns beside 5h/7d percentages, such as `2h 15m` and `3d 12h`; popups also retain the exact reset timestamp. Countdowns update every minute without extra API calls. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
 
 ## Connecting providers
 
 Codex uses its existing CLI login. Claude uses its credentials file or Keychain login; **Retry Keychain** cannot create a login or activate a plan. Run `claude` and sign in if no subscription login exists. Errors distinguish missing login, expiry, denied access, missing scope, API rejection and plans without a supported quota. The mod does not guess whether a subscription is inactive.
 
-Cursor tries its independent CLI login before desktop-token decryption. Run `cursor-agent login` if needed. If Keychain remains unavailable, click **Cursor → Use copied browser session**:
+Once usage is available, the popup hides its connection controls. Cursor tries its independent CLI login before desktop-token decryption. Run `cursor-agent login` if needed. If Keychain remains unavailable, click **Cursor → Use copied browser session**:
 
 1. In a signed-in `cursor.com` tab, open browser DevTools → Application → Cookies.
 2. Copy only the `WorkosCursorSessionToken` value.
@@ -41,7 +41,7 @@ node --check mods/usage-bar/main.js
 herdr-app check ~/.config/herdr-app/mods/usage-bar
 ```
 
-The native check is still pending because the build sandbox cannot initialize macOS window services. The actual bar, provider picker and connection panels were visually verified, including live Codex data; live Cursor/Claude readings need usable sign-ins. Tests use synthetic credentials and never read the user's clipboard.
+The native check is still pending because the build sandbox cannot initialize macOS window services. The actual bar, provider picker and connection panels were visually verified, including live Codex and Cursor data and reset countdowns; Claude still needs a usable sign-in. Tests use synthetic credentials and never read the user's clipboard.
 
 See [RECIPE.md](RECIPE.md) for the complete rebuilding brief and limits. The reference [Claude usage mod](https://github.com/dev-gvs/herdr-claude-usage) also notes that its credentials-file method does not read macOS Keychain; installing it would not fix a missing Mac login.
 

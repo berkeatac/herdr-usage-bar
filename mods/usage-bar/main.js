@@ -34,6 +34,19 @@ function resetText(value) {
   return Number.isNaN(date.getTime()) ? "Reset time unavailable" : `Resets ${date.toLocaleString()}`;
 }
 
+function resetCountdown(value, now = Date.now()) {
+  if (value == null || value === "") return null;
+  const reset = new Date(typeof value === "number" ? value * 1000 : value).getTime();
+  if (!Number.isFinite(reset)) return null;
+  const minutes = Math.ceil((reset - now) / 60000);
+  if (minutes <= 0) return "Reset pending";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor(minutes / 60) % 24;
+  if (days) return `${days}d ${hours}h`;
+  if (minutes >= 60) return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return `${minutes}m`;
+}
+
 function usageColor(n, t) {
   return n >= 95 ? t.blocked : n >= 75 ? t.working : t.foreground;
 }
@@ -51,6 +64,8 @@ export default class UsageBar extends View {
     this.width = 1200;
     this.detail = props()?.provider || null;
     this.settings = props()?.settings || false;
+    // Countdown data changes by the minute; this does not fetch provider usage.
+    if (!this.settings) cx.timer.every(60000, cx => cx.notify());
     if (this.detail || this.settings) return;
     setShared(SNAPSHOT, {});
     this.refreshAll(cx);
@@ -97,7 +112,9 @@ export default class UsageBar extends View {
   }
 
   open(provider) {
-    openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 480, height: provider === "cursor" ? 500 : 380 });
+    const connected = Boolean(shared(SNAPSHOT)?.[provider]?.windows?.length);
+    openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 480,
+      height: provider === "cursor" ? (connected ? 320 : 500) : 380 });
   }
 
   picker() {
@@ -127,7 +144,7 @@ export default class UsageBar extends View {
     const record = shared(SNAPSHOT)?.[provider] || this.records[provider];
     const windows = record?.windows || [];
     const title = `${NAMES[provider]} usage — ${record?.error || windows.map(w =>
-      `${w.label}: ${percent(w.used)} used. ${resetText(w.reset)}`).join("; ") || "Loading"}. Click for details.`;
+      `${w.label}: ${percent(w.used)} used. ${resetCountdown(w.reset) || "Countdown unavailable"}. ${resetText(w.reset)}`).join("; ") || "Loading"}. Click for details.`;
     const chip = Button.new(`usage-${provider}`).h_flex().items_center().gap(compact ? 5 : 7)
       .h(24).px(compact ? 6 : 8).rounded(4).flex_shrink_0().cursor_pointer()
       .hover(s => s.bg(t.raised)).accessibility_label(title).tooltip(title)
@@ -139,6 +156,10 @@ export default class UsageBar extends View {
       if (index) chip.child(div().text_color(t.dim).child("·"));
       chip.child(div().text_color(t.muted).child(w.label));
       chip.child(div().text_color(usageColor(w.used, t)).child(percent(w.used)));
+      const remaining = resetCountdown(w.reset);
+      if ((w.label === "5h" || w.label === "7d") && remaining) {
+        chip.child(div().text_size(10.5).text_color(t.dim).child(`(${remaining})`));
+      }
     });
     return chip;
   }
@@ -147,6 +168,7 @@ export default class UsageBar extends View {
     const t = theme();
     const provider = this.detail;
     const record = shared(SNAPSHOT)?.[provider];
+    const connected = Boolean(record?.windows?.length);
     const body = v_flex().id("usage-details").size_full().p(18).gap(12).bg(t.chrome).overflow_y_scrollbar()
       .text_size(12).text_color(t.foreground)
       .child(h_flex().items_center().justify_between()
@@ -155,14 +177,17 @@ export default class UsageBar extends View {
       .child(div().text_color(t.muted).child(provider === "cursor"
         ? "Total is included plan usage for this billing cycle."
         : "Percentages show quota used in each rolling window."));
-    if (record?.windows?.length) {
+    if (connected) {
       for (const w of record.windows) {
+        const remaining = resetCountdown(w.reset);
         body.child(v_flex().gap(5)
           .child(h_flex().justify_between()
             .child(div().child(w.label === "7d" ? "Weekly · 7 days" : w.label === "5h" ? "Current · 5 hours" : w.label))
             .child(div().font_semibold().text_color(usageColor(w.used, t)).child(`${percent(w.used)} used`)))
           .child(div().h(4).w_full().rounded(2).bg(t.border)
             .child(div().h(4).w(395 * Math.min(100, w.used) / 100).rounded(2).bg(usageColor(w.used, t))))
+          .when(Boolean(remaining), el => el.child(div().text_size(11.5).text_color(t.muted)
+            .child(remaining === "Reset pending" ? remaining : `Resets in ${remaining}`)))
           .child(div().text_size(11).text_color(t.dim).child(resetText(w.reset))));
       }
       body.child(div().text_size(11).text_color(t.dim)
@@ -176,13 +201,13 @@ export default class UsageBar extends View {
     const pending = ORDER.some(name => this.busy[name]);
     const actions = h_flex().gap(8).child(control("refresh-provider", pending ? "Refreshing…" : "Refresh all",
       (_event, cx) => this.refreshAll(cx), t).disabled(pending));
-    if (provider === "claude" || provider === "cursor") {
+    if (!connected && (provider === "claude" || provider === "cursor")) {
       actions.child(control("connect-provider", this.busy[provider] ? "Connecting…" : "Retry Keychain",
         (_event, cx) => this.refresh(provider, cx, true), t).disabled(Boolean(this.busy[provider]))
         .tooltip("Ask macOS to allow Python to read this provider's sign-in item. Automatic refresh never prompts."));
     }
     body.child(actions);
-    if (provider === "cursor") {
+    if (provider === "cursor" && !connected) {
       body.child(div().h(1).bg(t.border)).child(div().font_semibold().child("Connect without Keychain"))
         .child(div().text_size(11.5).text_color(t.muted).child("In a signed-in cursor.com tab: DevTools → Application → Cookies → WorkosCursorSessionToken. Copy only its value, then click below."))
         .child(control("copied-session", this.busy.cursor ? "Connecting…" : "Use copied browser session",

@@ -1,6 +1,6 @@
 # Usage Bar
 
-Codex, Claude and Cursor usage sits at the left of Herdr's bottom bar. A small token icon opens a provider picker; selections are remembered. Codex and Claude show their current and weekly quota windows when reported, while Cursor shows its included billing-cycle Total. Percentages mean used. The adjacent refresh arrow retries visible providers. An exclamation mark means the reading is unavailable; clicking explains why and what to do next. The preview is a crop of the real running mod, with only Codex connected.
+Codex, Claude and Cursor usage sits at the left of Herdr's bottom bar. A small token icon opens a provider picker; selections are remembered. Codex and Claude show their current and weekly quota windows when reported, while Cursor shows its included billing-cycle Total. Percentages mean used. The adjacent refresh arrow retries visible providers. An exclamation mark means the reading is unavailable; clicking explains why and what to do next. The preview is a crop of the real running mod, with the user’s selected providers and live Codex/Cursor readings.
 
 ![Usage Bar](preview.png)
 
@@ -10,13 +10,15 @@ A 28px strip, left to right: a 24px token-picker button with a 14px outlined hex
 
 The icon opens a 310×275px picker with 16px padding, a title, Close, three selectable provider buttons with checkmarks and a reminder that hidden providers stop automatic refresh. Selecting none leaves the icon, a `Choose providers` hint and the arrow.
 
-Provider details open in a 480px-wide popup, 380px high normally or 500px for Cursor, with 18px padding and vertical overflow scrolling. Show title and Close, an explanation, available quota percentages and 4px meters, reset timestamps and update time. For a failed reading show a short status heading, a specific explanation and an actionable next step. Bottom actions are Refresh all and Retry Keychain for Claude/Cursor. Cursor also has a separate Connect without Keychain section explaining how to copy the browser session and a Use copied browser session button.
+Provider details open in a 480px-wide popup, 380px high normally, 320px for connected Cursor or 500px for disconnected Cursor, with 18px padding and vertical overflow scrolling. Show title and Close, an explanation, available quota percentages and 4px meters, reset countdowns, exact local timestamps and update time. For a failed reading show a short status heading, a specific explanation and an actionable next step. Refresh all is always available. Retry Keychain appears only for disconnected Claude/Cursor. Disconnected Cursor also has a separate Connect without Keychain section explaining how to copy the browser session and a Use copied browser session button.
 
 ## How it behaves
 
-Read selected providers independently on first display and every two minutes. Hiding a provider removes it and stops subsequent automatic reads; enabling it starts a read immediately. Save the selected provider names across layouts and restarts. The picker does not change sign-ins. Native buttons support pointer and keyboard activation. Hovers explain percentages, reset times and actions. Escape or Close dismisses popups.
+Read selected providers independently on first display and every two minutes. Hiding a provider removes it and stops subsequent automatic reads; enabling it starts a read immediately. Save the selected provider names across layouts and restarts. Successful readings hide the sign-in controls, including Cursor’s browser-session section. The picker does not change sign-ins. Native buttons support pointer and keyboard activation. Hovers explain percentages, reset times and actions. Escape or Close dismisses popups.
 
 Show an ellipsis for the initial pending read, `!` for a failure and a real `0%` for actual zero. Percentages between zero and one are `<1%`, between 99 and 100 are `>99%`. Keep reported values over 100% visible while clamping meter widths. A failed read clears previous numbers for that provider. Other providers retain their readings. Agent states working, blocked, done and idle do not affect quota displays; threshold colors describe consumption only.
+
+Countdowns show remaining days/hours (3d 12h), hours/minutes (2h 15m), or minutes below an hour. Keep the exact local reset timestamp below each popup countdown. Show the countdown in parentheses after each 5h/7d percentage in the bar. Missing or malformed reset times have no countdown; elapsed reset times say Reset pending until the next provider reading. A 60000ms timer redraws the bar and detail popups without making provider requests.
 
 Popup actions run directly in that popup's copy. Show Connecting… or Refreshing… while its work is pending and disable duplicate actions there. Publish sanitized results so the bar updates immediately. Never route popup actions through an app command that may not reach the intended copy.
 
@@ -48,7 +50,7 @@ Provider interfaces were checked against [CodexBar's provider documentation](htt
 
 One local account per provider is supported, even while viewing remote terminals. Custom proxies, browser database import, automatic token renewal, API-only quotas, Cursor legacy/team pools, spending and all-time totals are not implemented. Windows is unsupported; Keychain and clipboard connection are macOS-specific. A stored browser session is an explicit override and may need replacing when it expires. Remove `data/usage-bar/cursor-session.json` to forget it and return to automatic source selection. Never include that file in the sharing package.
 
-The native bar, picker toggles, live Codex usage and Cursor connection panel were visually checked. Cursor/Claude live readings still require usable sign-ins. `herdr-app check` was attempted but timed out initializing macOS window services in the agent sandbox; no passing native check is claimed. Publishing remains deferred until the owner has tested and explicitly requests it.
+The native bar, picker toggles, live Codex/Cursor usage, reset countdowns and the connected Cursor popup were visually checked. Claude readings still require a usable sign-in. `herdr-app check` was attempted but timed out initializing macOS window services in the agent sandbox; no passing native check is claimed. Publishing remains deferred until the owner has tested and explicitly requests it.
 
 ## Done when
 

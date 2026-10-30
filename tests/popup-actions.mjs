@@ -11,6 +11,7 @@ function element(id) {
       if (property === "nodeState") return target;
       if (property in target) return target[property];
       return (...args) => {
+        if (property === "when" && args[0]) return args[1](proxy);
         if (property === "child") target.nodes.push(args[0]);
         if (property === "children") target.nodes.push(...args[0]);
         if (property === "on_click") target.click = args[0];
@@ -30,7 +31,10 @@ const snapshots = new Map([["usage-bar.snapshot", {
 }]]);
 const calls = [];
 const pending = [];
-const cx = { notify() {}, spawn(fn) { pending.push(fn(cx)); } };
+const timers = [];
+const overlays = [];
+const cx = { notify() {}, spawn(fn) { pending.push(fn(cx)); },
+  timer: { every(ms, fn) { timers.push({ ms, fn }); } } };
 let currentProvider = "cursor";
 let settingsMode = false;
 const source = fs.readFileSync(new URL("../mods/usage-bar/main.js", import.meta.url), "utf8")
@@ -45,9 +49,17 @@ const context = vm.createContext({
   exec: async (program, args) => {
     calls.push({ program, args });
     return { code: 0, stdout: JSON.stringify({ provider: args[1], windows: [{ label: "Total", used: 35 }], updated: 2 }) };
-  }, closeOverlay() {}, openOverlay() {}, nextCommand() {},
+  }, closeOverlay() {}, openOverlay(spec) { overlays.push(spec); }, nextCommand() {},
 });
 vm.runInContext(source, context);
+
+const now = Date.now();
+assert.equal(context.resetCountdown((now + (3 * 24 + 12) * 3600000) / 1000, now), "3d 12h");
+assert.equal(context.resetCountdown(new Date(now + 135 * 60000).toISOString(), now), "2h 15m");
+assert.equal(context.resetCountdown((now + 1000) / 1000, now), "1m");
+assert.equal(context.resetCountdown((now - 1) / 1000, now), "Reset pending");
+assert.equal(context.resetCountdown("invalid", now), null);
+assert.equal(context.resetCountdown(null, now), null);
 
 const popup = new context.UsageBar();
 popup.init({}, cx);
@@ -75,10 +87,25 @@ await Promise.all(pending.splice(0));
 assert.equal(calls.length, 3, "Refresh all should call all three providers");
 assert.ok(calls.every(call => !call.args.includes("--allow-keychain-prompt")), "ordinary refresh must not prompt");
 calls.length = 0;
+controls.clear();
+popup.details();
+assert.equal(controls.has("copied-session"), false, "connected Cursor must hide the browser login section");
+assert.equal(controls.has("connect-provider"), false, "connected providers must hide Keychain retry");
+bar.open("cursor");
+assert.equal(overlays.at(-1).height, 320, "connected Cursor should use a compact popup");
+snapshots.get("usage-bar.snapshot").cursor = { provider: "cursor", windows: [], error: "missing login" };
+controls.clear();
 popup.details();
 controls.get("copied-session").click({}, cx);
 await Promise.all(pending.splice(0));
 assert.ok(calls[0].args.includes("--cursor-session-from-clipboard"), "browser connection is an explicit clipboard action");
+
+snapshots.get("usage-bar.snapshot").codex.windows = [{ label: "5h", used: 22, reset: (Date.now() + 135 * 60000) / 1000 }];
+bar.chip("codex", false, {});
+assert.equal(controls.get("usage-codex").nodes.at(-1).nodeState.nodes[0], "(2h 15m)");
+const beforeTimer = calls.length;
+timers.find(timer => timer.ms === 60000).fn(cx);
+assert.equal(calls.length, beforeTimer, "countdown ticks must not fetch usage");
 
 settingsMode = true;
 const picker = new context.UsageBar();
