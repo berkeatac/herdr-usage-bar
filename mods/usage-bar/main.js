@@ -1,7 +1,7 @@
 import { View, div } from "gpui-kit";
 import { Button, h_flex, v_flex } from "gpui-base";
 import { appHome, exec, theme, props, openOverlay, closeOverlay,
-  shared, setShared, nextCommand, run } from "herdr";
+  shared, setShared, nextCommand } from "herdr";
 
 const NAMES = { codex: "Codex", claude: "Claude", cursor: "Cursor" };
 const ORDER = ["codex", "claude", "cursor"];
@@ -58,6 +58,7 @@ export default class UsageBar extends View {
   refresh(provider, cx, allowKeychain = false) {
     if (this.busy[provider]) return;
     this.busy[provider] = true;
+    cx.notify();
     cx.spawn(async cx => {
       try {
         const args = [`${appHome()}/mods/usage-bar/collect.py`, provider];
@@ -72,7 +73,7 @@ export default class UsageBar extends View {
           error: "Usage helper unavailable. Install Python 3 and check the mod files." };
       }
       this.busy[provider] = false;
-      setShared(SNAPSHOT, this.records);
+      setShared(SNAPSHOT, { ...(shared(SNAPSHOT) || {}), [provider]: this.records[provider] });
       cx.notify();
     });
   }
@@ -82,7 +83,7 @@ export default class UsageBar extends View {
   }
 
   chip(provider, compact, t) {
-    const record = this.records[provider];
+    const record = shared(SNAPSHOT)?.[provider] || this.records[provider];
     const windows = record?.windows || [];
     const title = `${NAMES[provider]} usage — ${record?.error || windows.map(w =>
       `${w.label}: ${percent(w.used)} used. ${resetText(w.reset)}`).join("; ") || "Loading"}. Click for details.`;
@@ -129,9 +130,12 @@ export default class UsageBar extends View {
       body.child(div().text_color(t.muted).child(record?.error || "Reading usage…"));
     }
     body.child(div().flex_1());
-    const actions = h_flex().gap(8).child(control("refresh-provider", "Refresh all", () => run("usage-bar.refresh"), t));
+    const pending = ORDER.some(name => this.busy[name]);
+    const actions = h_flex().gap(8).child(control("refresh-provider", pending ? "Refreshing…" : "Refresh all",
+      (_event, cx) => this.refreshAll(cx), t).disabled(pending));
     if (provider === "claude" || provider === "cursor") {
-      actions.child(control("connect-provider", "Allow Keychain access", () => run(`usage-bar.connect-${provider}`), t)
+      actions.child(control("connect-provider", this.busy[provider] ? "Connecting…" : "Allow Keychain access",
+        (_event, cx) => this.refresh(provider, cx, true), t).disabled(Boolean(this.busy[provider]))
         .tooltip("Ask macOS to allow Python to read this provider's sign-in item. Automatic refresh never prompts."));
     }
     return body.child(actions);

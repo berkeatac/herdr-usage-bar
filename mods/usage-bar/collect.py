@@ -96,6 +96,8 @@ def decrypt_cursor(value, allow_prompt=False):
         raise Unavailable("Unsupported Cursor credential format.")
     secret = keychain("Cursor Safe Storage", "Cursor", allow_prompt)
     if not secret:
+        if allow_prompt:
+            raise Unavailable("macOS did not provide Cursor's sign-in key. Unlock your login keychain and retry, or sign in again in Cursor.")
         raise Unavailable("Keychain access needed. Click Cursor, then Allow Keychain access.")
     payload = base64.b64decode(value.split(":", 2)[2], validate=True)
     if payload[:3] != b"v10" or not payload[3:] or len(payload[3:]) % 16:

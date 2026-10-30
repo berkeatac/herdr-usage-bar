@@ -41,6 +41,7 @@ These provider account interfaces can change. API-key-only accounts, Cursor lega
 ```sh
 python3 -m unittest discover -s tests -v
 node --check mods/usage-bar/main.js
+node tests/popup-actions.mjs
 herdr-app check mods/usage-bar
 ```
 
