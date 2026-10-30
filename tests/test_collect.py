@@ -1,6 +1,12 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import base64
+import json
+import os
+import tempfile
+import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("collect", Path(__file__).resolve().parents[1] / "mods/usage-bar/collect.py")
@@ -48,6 +54,42 @@ class QuotaTests(unittest.TestCase):
              patch.object(collector, "codex", return_value=[{"label": "5h", "used": 0, "reset": None}]):
             self.assertEqual(collector.collect("claude")["error"], "offline")
             self.assertIsNone(collector.collect("codex")["error"])
+
+    def test_structured_errors_preserve_next_step(self):
+        with patch.object(collector, "claude", side_effect=collector.Unavailable("No saved login", "not_signed_in", "Sign in with Claude Code")):
+            result = collector.collect("claude")
+        self.assertEqual(result["code"], "not_signed_in")
+        self.assertEqual(result["action"], "Sign in with Claude Code")
+
+    def test_cursor_cli_file_does_not_require_desktop_keychain(self):
+        payload = base64.urlsafe_b64encode(json.dumps({"sub": "auth0|test-user", "exp": time.time()+3600}).encode()).decode().rstrip("=")
+        token = "header." + payload + ".signature"
+        with patch.object(collector, "load_json", return_value={"accessToken": token}), \
+             patch.object(collector, "keychain", side_effect=AssertionError("Keychain should not be used")):
+            self.assertEqual(collector.cursor_token(), "test-user%3A%3A" + token)
+
+    def test_browser_session_is_validated_and_saved_owner_only(self):
+        payload = base64.urlsafe_b64encode(json.dumps({"sub": "auth0|test-user", "exp": time.time()+3600}).encode()).decode().rstrip("=")
+        cookie = "test-user%3A%3Aheader." + payload + ".signature"
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"private/session.json"
+            with patch.object(collector.sys, "platform", "darwin"), \
+                 patch.object(collector, "session_path", return_value=path), \
+                 patch.object(collector.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=cookie.encode())), \
+                 patch.object(collector, "request", return_value={"individualUsage": {"plan": {"totalPercentUsed": 10}}}):
+                collector.save_copied_session()
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(path.read_text())["cookie"], cookie)
+
+    def test_invalid_clipboard_is_never_saved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"session.json"
+            with patch.object(collector.sys, "platform", "darwin"), \
+                 patch.object(collector, "session_path", return_value=path), \
+                 patch.object(collector.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=b"not a token")):
+                result = collector.collect("cursor", copied_session=True)
+            self.assertEqual(result["code"], "invalid_session")
+            self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

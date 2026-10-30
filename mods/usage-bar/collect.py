@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import socket
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.error
@@ -17,7 +18,10 @@ import urllib.request
 
 
 class Unavailable(Exception):
-    pass
+    def __init__(self, message, code="unavailable", action=None):
+        super().__init__(message)
+        self.code = code
+        self.action = action
 
 
 def number(value):
@@ -54,13 +58,17 @@ def request(url, headers):
                 raise Unavailable("Unexpected usage response; provider integration needs an update.")
             return result
     except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            raise Unavailable("Sign in again in the provider app; usage access was rejected.")
+        if e.code == 401:
+            raise Unavailable("Your sign-in was rejected or has expired (HTTP 401).", "expired",
+                              "Sign in again in this provider's app, then refresh.")
+        if e.code == 403:
+            raise Unavailable("The provider refused access to usage (HTTP 403).", "forbidden",
+                              "Check the account's subscription and usage permissions. This response alone does not confirm an inactive subscription.")
         if e.code == 429:
-            raise Unavailable("Rate limited; wait a few minutes before refreshing.")
+            raise Unavailable("The provider is rate limiting usage requests (HTTP 429).", "rate_limited", "Wait a few minutes, then refresh.")
         raise Unavailable("Provider returned HTTP " + str(e.code) + ".")
     except (urllib.error.URLError, TimeoutError, socket.timeout, OSError):
-        raise Unavailable("Cannot reach provider; check your connection.")
+        raise Unavailable("The usage service could not be reached.", "offline", "Check your connection, then refresh.")
     except (ValueError, UnicodeError):
         raise Unavailable("Unexpected usage response; provider integration needs an update.")
 
@@ -82,7 +90,14 @@ def keychain(service, account=None, allow_prompt=False):
     status = sec.SecKeychainFindGenericPassword(None, len(service_b), service_b,
         len(account_b) if account_b else 0, account_b, ctypes.byref(size), ctypes.byref(data), None)
     if status != 0:
-        return None
+        messages = {
+            -25300: (f'macOS Keychain has no "{service}" item readable by this process.', "keychain_missing"),
+            -25308: ("macOS Keychain requires interaction or is locked.", "keychain_locked"),
+            -25293: ("macOS denied access to the saved sign-in item.", "keychain_denied"),
+            -128: ("The Keychain request was cancelled.", "cancelled"),
+        }
+        message, code = messages.get(status, (f"macOS could not read the sign-in item (OSStatus {status}).", "keychain_error"))
+        raise Unavailable(message, code, "Use the provider's own sign-in or a browser session instead. Granting Keychain access does not create a login.")
     try:
         return ctypes.string_at(data, size.value).decode("utf-8")
     finally:
@@ -157,18 +172,48 @@ def claude(allow_prompt=False):
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
     credentials = load_json(root / ".credentials.json")
     if not credentials.get("claudeAiOauth") and "CLAUDE_CONFIG_DIR" not in os.environ:
-        raw = keychain("Claude Code-credentials", allow_prompt=allow_prompt)
+        try:
+            raw = keychain("Claude Code-credentials", allow_prompt=allow_prompt)
+        except Unavailable as error:
+            if error.code == "keychain_missing":
+                raise Unavailable("No Claude Code subscription sign-in was found on this Mac.", "not_signed_in",
+                                  "Run claude and sign in. Keychain permission does not activate a subscription or create a login.")
+            raise Unavailable(error.args[0], error.code,
+                              "Unlock your login keychain and retry, or sign in again through Claude Code. This does not establish whether the subscription is active.")
         if raw:
             credentials = json.loads(raw)
     token = (credentials.get("claudeAiOauth") or {}).get("accessToken")
     if not token:
-        raise Unavailable("Claude Code sign-in or Keychain access needed. Open details to connect.")
+        raise Unavailable("No Claude subscription sign-in token is saved.", "not_signed_in",
+                          "Run claude and sign in to an account with Claude Code access. Keychain permission alone is not a login.")
+    oauth = credentials.get("claudeAiOauth") or {}
+    expires = number(oauth.get("expiresAt"))
+    if expires and expires / 1000 <= time.time():
+        raise Unavailable("Claude's saved sign-in has expired.", "expired", "Open Claude Code and sign in again; this mod does not renew credentials.")
+    scopes = oauth.get("scopes")
+    if isinstance(scopes, list) and "user:profile" not in scopes:
+        raise Unavailable("This Claude token does not have permission to read subscription usage.", "missing_scope",
+                          "Sign in through Claude Code. An API key or setup-token token cannot provide this usage view.")
     return parse_claude(request("https://api.anthropic.com/api/oauth/usage",
         {"Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20"}))
 
 
 def cursor_token(allow_prompt=False):
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    # Cursor CLI has an independent login; prefer its file over desktop decryption.
+    cli_path = Path.home() / ".cursor/auth.json" if sys.platform == "darwin" else config / "cursor/auth.json"
+    cli = load_json(cli_path).get("accessToken")
+    if cli:
+        return cursor_cookie(cli)
+    # The macOS CLI normally uses these exact item names (verified in its source).
+    cli_failure = None
+    if sys.platform == "darwin":
+        try:
+            cli = keychain("cursor-access-token", "cursor-user", allow_prompt)
+            if cli:
+                return cursor_cookie(cli)
+        except Unavailable as error:
+            cli_failure = error
     db = (Path.home() / "Library/Application Support/Cursor/User/globalStorage/state.vscdb"
           if sys.platform == "darwin" else config / "Cursor/User/globalStorage/state.vscdb")
     token = None
@@ -183,21 +228,66 @@ def cursor_token(allow_prompt=False):
             if isinstance(token, bytes):
                 token = token.decode("utf-16-le" if b"\x00" in token else "utf-8")
     if not token:
-        token = load_json(config / "cursor/auth.json").get("accessToken")
-    if not token:
-        raise Unavailable("Sign in to Cursor or run cursor-agent login.")
-    token = decrypt_cursor(token, allow_prompt)
+        raise cli_failure or Unavailable("No Cursor app or CLI sign-in was found.", "not_signed_in",
+                                        "Run cursor-agent login, or connect using a copied browser session below.")
+    try:
+        token = decrypt_cursor(token, allow_prompt)
+    except Unavailable as error:
+        raise Unavailable(error.args[0], error.code,
+                          "Try cursor-agent login, or use a copied browser session below. Desktop Keychain access is optional.")
+    return cursor_cookie(token)
+
+
+def cursor_cookie(token):
+    # Accept an explicit cookie value as well as a CLI/app JWT.
+    token = token.split("%3A%3A")[-1].split("::")[-1]
     try:
         part = token.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
         if float(claims.get("exp", 0)) <= time.time() + 60:
-            raise Unavailable("Cursor sign-in expired; open Cursor and sign in again.")
+            raise Unavailable("Cursor's saved sign-in has expired.", "expired", "Sign in again in Cursor or replace the saved browser session.")
         user = claims["sub"].split("|")[-1]
         if not user or any(not (c.isascii() and (c.isalnum() or c in "._-")) for c in user):
             raise ValueError()
     except (KeyError, IndexError, ValueError, TypeError):
         raise Unavailable("Invalid Cursor sign-in data; sign in again in Cursor.")
     return user + "%3A%3A" + token
+
+
+def session_path():
+    root = Path(os.environ.get("HERDR_APP_HOME", Path.home() / ".config/herdr-app"))
+    return root / "data/usage-bar/cursor-session.json"
+
+
+def save_copied_session():
+    """Only called by the explicit Use copied browser session action; never log clipboard."""
+    if sys.platform != "darwin":
+        raise Unavailable("Clipboard connection is currently supported on macOS only.", "unsupported")
+    result = subprocess.run(["/usr/bin/pbpaste"], capture_output=True, timeout=3)
+    value = result.stdout.decode("utf-8").strip()
+    if result.returncode or len(value) > 16384 or not value:
+        raise Unavailable("The clipboard does not contain a usable session value.", "invalid_session",
+                          "Copy only the WorkosCursorSessionToken cookie value from cursor.com, then try again.")
+    if value.startswith("WorkosCursorSessionToken="):
+        value = value.split("=", 1)[1].split(";", 1)[0]
+    try:
+        cookie = cursor_cookie(value)
+    except (Unavailable, ValueError, UnicodeError):
+        raise Unavailable("The copied value is not a current Cursor session.", "invalid_session",
+                          "In your signed-in cursor.com tab, open DevTools → Application → Cookies and copy WorkosCursorSessionToken's value.")
+    # Check the session with its provider before saving it, so a rejected cookie isn't retained.
+    data = request("https://cursor.com/api/usage-summary", {"Cookie": "WorkosCursorSessionToken=" + cookie})
+    path = session_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = path.with_name(".cursor-session-" + str(os.getpid()))
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as file:
+            json.dump({"cookie": cookie}, file)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return data
 
 
 def parse_cursor(data):
@@ -214,27 +304,36 @@ def parse_cursor(data):
 
 
 def cursor(allow_prompt=False):
+    saved = load_json(session_path()).get("cookie")
+    if saved:
+        return parse_cursor(request("https://cursor.com/api/usage-summary",
+            {"Cookie": "WorkosCursorSessionToken=" + cursor_cookie(saved)}))
     return parse_cursor(request("https://cursor.com/api/usage-summary",
         {"Cookie": "WorkosCursorSessionToken=" + cursor_token(allow_prompt)}))
 
 
-def collect(provider, allow_prompt=False):
+def collect(provider, allow_prompt=False, copied_session=False):
     try:
-        windows = {"codex": codex, "claude": claude, "cursor": cursor}[provider](allow_prompt)
+        windows = (parse_cursor(save_copied_session()) if copied_session and provider == "cursor" else
+                   {"codex": codex, "claude": claude, "cursor": cursor}[provider](allow_prompt))
         if not windows:
-            raise Unavailable("Provider did not report a supported quota. No usage percentage is assumed.")
+            raise Unavailable("The account responded, but did not report a supported subscription quota.", "no_quota",
+                              "Check your plan on the provider's usage page. An inactive, API-only, unlimited or unsupported plan may have no percentage here.")
         return {"provider": provider, "windows": windows, "updated": int(time.time()), "error": None}
     except Unavailable as e:
-        return {"provider": provider, "windows": [], "updated": None, "error": str(e)}
+        return {"provider": provider, "windows": [], "updated": None, "error": str(e),
+                "code": e.code, "action": e.action}
     except Exception:
         # Never echo exceptions containing request URLs, headers or credential values.
         return {"provider": provider, "windows": [], "updated": None,
-                "error": "Could not read usage; check provider sign-in and local file permissions."}
+                "error": "The local usage reader could not complete the request.", "code": "reader_error",
+                "action": "Check local file permissions and provider sign-in. No credential values are included in diagnostics."}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("provider", choices=["codex", "claude", "cursor"])
     parser.add_argument("--allow-keychain-prompt", action="store_true")
+    parser.add_argument("--cursor-session-from-clipboard", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(collect(args.provider, args.allow_keychain_prompt), allow_nan=False))
+    print(json.dumps(collect(args.provider, args.allow_keychain_prompt, args.cursor_session_from_clipboard), allow_nan=False))

@@ -1,50 +1,48 @@
 # Usage Bar for Herdr
 
-Codex, Claude and Cursor subscription usage at the left of the bottom bar. Percentages show **used** quota: current and weekly windows where available, or Cursor's included billing-cycle **Total**.
+Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 
 ![Usage Bar](preview.png)
 
-This is a local test build. Nothing has been published. The preview is a cropped screenshot of the real running bar; Claude and Cursor show dashes until connected.
+Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
 
-## Test the installed copy
+## Connecting providers
 
-The local mod is installed at `~/.config/herdr-app/mods/usage-bar`. The personal layout `main-usage` places it beside the original status bar. Choose **Layout: Main-usage** in Herdr's command palette if another layout is selected. Click a provider for reset times or an error; click the arrow to refresh. Claude and Cursor's **Allow Keychain access** button asks macOS for permission to read their existing sign-in item. Automatic refresh does not prompt. Sign in through the provider's own app if a token has expired.
+Codex uses its existing CLI login. Claude uses its credentials file or Keychain login; **Retry Keychain** cannot create a login or activate a plan. Run `claude` and sign in if no subscription login exists. Errors distinguish missing login, expiry, denied access, missing scope, API rejection and plans without a supported quota. The mod does not guess whether a subscription is inactive.
 
-No global keys are added. The bar refreshes every two minutes. A missing reading is a dash, never an assumed zero. It reads the local signed-in accounts even when viewing a remote space.
+Cursor tries its independent CLI login before desktop-token decryption. Run `cursor-agent login` if needed. If Keychain remains unavailable, click **Cursor → Use copied browser session**:
 
-Run the required native check from your ordinary Mac terminal:
+1. In a signed-in `cursor.com` tab, open browser DevTools → Application → Cookies.
+2. Copy only the `WorkosCursorSessionToken` value.
+3. Click **Use copied browser session** in the mod. Do not paste the token into chat.
 
-```sh
-herdr-app check ~/.config/herdr-app/mods/usage-bar
-```
+This explicit button reads the clipboard, validates the session with Cursor, and saves an owner-only file at `~/.config/herdr-app/data/usage-bar/cursor-session.json` (or under HERDR_APP_HOME). Automatic refresh uses that session without Keychain. Replace it through the same button if it expires. Delete that file to forget it and return to automatic source selection. No browser cookie database is scanned.
 
-The build session could not complete that check because macOS window services were blocked in its sandbox. Native rendering, a live Codex reading and the details popup were visually verified. Claude/Cursor live readings still need Keychain access and testing.
+## Local testing and installation
 
-## Install on another setup
+The installed mod is `~/.config/herdr-app/mods/usage-bar`. It is placed in a personal copy of the standard layout, currently `main-copy`. No global keybindings are added. The package is a mod, contains no `layouts/` folder and has not been published.
 
-Requires Herdr and Python 3. On macOS, the helper can use native Keychain and decrypt current Cursor app credentials. Linux supports file-based sign-in sources; Windows is not supported.
+On another setup, with Herdr and Python 3 installed:
 
 ```sh
 python3 install.py
 ```
 
-The installer validates the source mod, refuses existing destination names, clones the current layout and adds the bar to that personal copy. It preserves the original status bar. The package intentionally has no `layouts/` folder and needs no keys.json snippet. For a custom installation, put a `{ "mod": "usage-bar" }` block on the left of your own 28px status row.
+The installer first validates the mod, refuses destination collisions, clones the current layout and adds the bar while preserving the original status bar. For manual placement use a `{ "mod": "usage-bar" }` block at the left of a 28px status row in a layout you own.
 
-## Data access
+## Data access and checks
 
-The mod runs its bundled Python helper. It reads Codex/Claude sign-in files, Cursor's read-only state database or CLI auth file, and these exact macOS Keychain items when accessible: **Claude Code-credentials** and **Cursor Safe Storage / Cursor**. It contacts only `chatgpt.com`, `api.anthropic.com` and `cursor.com` for usage. Tokens stay in memory and go only to their own provider; no credential is printed, copied into this repository, or changed. The mod stores normalized readings in Herdr shared state. It does not read browser cookies, launch model requests or install dependencies.
-
-These provider account interfaces can change. API-key-only accounts, Cursor legacy/team quotas and multiple accounts are outside this build. See [RECIPE.md](RECIPE.md) for the complete rebuilding brief and endpoint sources.
-
-## Validation and removal
+The helper reads only known provider auth sources and calls `chatgpt.com`, `api.anthropic.com` and `cursor.com` for usage. Saved provider credentials are not changed or refreshed. Normalized readings and provider preferences are kept in Herdr shared state; secrets never go there, into command arguments, logs or this repository. Only the explicit copied-session action saves a new local credential. macOS supports Keychain and clipboard connection; Linux supports file-based sign-ins. Windows is unsupported.
 
 ```sh
 python3 -m unittest discover -s tests -v
-node --check mods/usage-bar/main.js
 node tests/popup-actions.mjs
-herdr-app check mods/usage-bar
+node --check mods/usage-bar/main.js
+herdr-app check ~/.config/herdr-app/mods/usage-bar
 ```
 
-Switch back to the original layout before removing the mod and its personal layout copy. Do not delete the shipped main layout. Local full-window screenshots are ignored under `.local/`; `preview.png` contains only the usage strip.
+The native check is still pending because the build sandbox cannot initialize macOS window services. The actual bar, provider picker and connection panels were visually verified, including live Codex data; live Cursor/Claude readings need usable sign-ins. Tests use synthetic credentials and never read the user's clipboard.
 
-When the owner approves publication, publish this folder to a public GitHub repository and set topic `herdr-mod`. Do not publish until that approval arrives.
+See [RECIPE.md](RECIPE.md) for the complete rebuilding brief and limits. The reference [Claude usage mod](https://github.com/dev-gvs/herdr-claude-usage) also notes that its credentials-file method does not read macOS Keychain; installing it would not fix a missing Mac login.
+
+Nothing is pushed. After the owner's testing and explicit publication request, publish the package to a public GitHub repository with topic `herdr-mod`. Never include `data/`, credentials or full-window screenshots.

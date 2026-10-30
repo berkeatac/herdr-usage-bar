@@ -5,13 +5,14 @@ import vm from "node:vm";
 
 const controls = new Map();
 function element(id) {
-  const state = { id, children: [], click: null, disabled: false };
+  const state = { elementId: id, nodes: [], click: null, disabled: false };
   const proxy = new Proxy(state, {
     get(target, property) {
+      if (property === "nodeState") return target;
       if (property in target) return target[property];
       return (...args) => {
-        if (property === "child") target.children.push(args[0]);
-        if (property === "children") target.children.push(...args[0]);
+        if (property === "child") target.nodes.push(args[0]);
+        if (property === "children") target.nodes.push(...args[0]);
         if (property === "on_click") target.click = args[0];
         if (property === "disabled") target.disabled = args[0];
         return proxy;
@@ -31,13 +32,14 @@ const calls = [];
 const pending = [];
 const cx = { notify() {}, spawn(fn) { pending.push(fn(cx)); } };
 let currentProvider = "cursor";
+let settingsMode = false;
 const source = fs.readFileSync(new URL("../mods/usage-bar/main.js", import.meta.url), "utf8")
   .replace(/^import[\s\S]*?from "[^"]+";\s*/gm, "")
   .replace("export default class UsageBar", "globalThis.UsageBar = class UsageBar");
 const context = vm.createContext({
-  View: class {}, div: () => element(), h_flex: () => element(), v_flex: () => element(),
+  View: class {}, div: () => element(), svg: () => element(), h_flex: () => element(), v_flex: () => element(),
   Button: { new: id => element(id) }, theme: () => ({}),
-  props: () => ({ provider: currentProvider, overlay: "test" }),
+  props: () => ({ provider: settingsMode ? undefined : currentProvider, settings: settingsMode, overlay: "test" }),
   appHome: () => "/test", shared: key => snapshots.get(key),
   setShared: (key, value) => snapshots.set(key, value),
   exec: async (program, args) => {
@@ -62,8 +64,9 @@ assert.equal(popup.busy.cursor, false);
 
 const bar = new context.UsageBar();
 bar.records = {};
+bar.busy = {};
 const chip = bar.chip("cursor", false, {});
-assert.equal(controls.get("usage-cursor").children.at(-1).children[0], "35%", "bar should reflect popup's new usage immediately");
+assert.equal(controls.get("usage-cursor").nodes.at(-1).nodeState.nodes[0], "35%", "bar should reflect popup's new usage immediately");
 
 popup.details();
 calls.length = 0;
@@ -71,4 +74,24 @@ controls.get("refresh-provider").click({}, cx);
 await Promise.all(pending.splice(0));
 assert.equal(calls.length, 3, "Refresh all should call all three providers");
 assert.ok(calls.every(call => !call.args.includes("--allow-keychain-prompt")), "ordinary refresh must not prompt");
+calls.length = 0;
+popup.details();
+controls.get("copied-session").click({}, cx);
+await Promise.all(pending.splice(0));
+assert.ok(calls[0].args.includes("--cursor-session-from-clipboard"), "browser connection is an explicit clipboard action");
+
+settingsMode = true;
+const picker = new context.UsageBar();
+picker.init({}, cx);
+picker.render();
+controls.get("show-cursor").click({}, cx);
+assert.equal(snapshots.get("usage-bar.providers").includes("cursor"), false);
+calls.length = 0;
+bar.refreshAll(cx);
+await Promise.all(pending.splice(0));
+assert.deepEqual(calls.map(call => call.args[1]), ["codex", "claude"], "hidden providers must not be polled");
+picker.render();
+controls.get("show-cursor").click({}, cx);
+await Promise.all(pending.splice(0));
+assert.ok(snapshots.get("usage-bar.providers").includes("cursor"), "picker should persist re-enabling a provider");
 console.log("Popup connect, progress, shared readings, and refresh callbacks passed (synthetic credentials).");

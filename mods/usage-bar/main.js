@@ -1,4 +1,4 @@
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { Button, h_flex, v_flex } from "gpui-base";
 import { appHome, exec, theme, props, openOverlay, closeOverlay,
   shared, setShared, nextCommand } from "herdr";
@@ -6,6 +6,21 @@ import { appHome, exec, theme, props, openOverlay, closeOverlay,
 const NAMES = { codex: "Codex", claude: "Claude", cursor: "Cursor" };
 const ORDER = ["codex", "claude", "cursor"];
 const SNAPSHOT = "usage-bar.snapshot";
+const PROVIDERS = "usage-bar.providers";
+
+function enabledProviders() {
+  const saved = shared(PROVIDERS);
+  return Array.isArray(saved) ? ORDER.filter(name => saved.includes(name)) : ORDER;
+}
+
+const ERRORS = {
+  not_signed_in: "Not signed in", expired: "Sign-in expired", forbidden: "Usage access refused",
+  missing_scope: "Usage permission missing", no_quota: "No quota reported", offline: "Offline",
+  rate_limited: "Try again later", keychain_locked: "Keychain locked",
+  keychain_missing: "Sign-in key missing",
+  keychain_denied: "Keychain access denied", keychain_error: "Keychain unavailable",
+  cancelled: "Request cancelled", invalid_session: "Session not connected", reader_error: "Reader error",
+};
 
 function percent(n) {
   if (n > 0 && n < 1) return "<1%";
@@ -35,7 +50,8 @@ export default class UsageBar extends View {
     this.busy = {};
     this.width = 1200;
     this.detail = props()?.provider || null;
-    if (this.detail) return;
+    this.settings = props()?.settings || false;
+    if (this.detail || this.settings) return;
     setShared(SNAPSHOT, {});
     this.refreshAll(cx);
     cx.timer.every(120000, cx => this.refreshAll(cx));
@@ -52,10 +68,10 @@ export default class UsageBar extends View {
   }
 
   refreshAll(cx) {
-    for (const provider of ORDER) this.refresh(provider, cx);
+    for (const provider of enabledProviders()) this.refresh(provider, cx);
   }
 
-  refresh(provider, cx, allowKeychain = false) {
+  refresh(provider, cx, allowKeychain = false, copiedSession = false) {
     if (this.busy[provider]) return;
     this.busy[provider] = true;
     cx.notify();
@@ -63,6 +79,7 @@ export default class UsageBar extends View {
       try {
         const args = [`${appHome()}/mods/usage-bar/collect.py`, provider];
         if (allowKeychain) args.push("--allow-keychain-prompt");
+        if (copiedSession) args.push("--cursor-session-from-clipboard");
         const result = await exec("python3", args);
         if (result.code !== 0) throw new Error("helper");
         const record = JSON.parse(result.stdout);
@@ -70,7 +87,8 @@ export default class UsageBar extends View {
         this.records[provider] = record;
       } catch (_) {
         this.records[provider] = { provider, windows: [], updated: null,
-          error: "Usage helper unavailable. Install Python 3 and check the mod files." };
+          error: "The local usage helper did not finish successfully.", code: "reader_error",
+          action: "Check that Python 3 is available. A long-running permission dialog can also time out; close it and retry." };
       }
       this.busy[provider] = false;
       setShared(SNAPSHOT, { ...(shared(SNAPSHOT) || {}), [provider]: this.records[provider] });
@@ -79,7 +97,30 @@ export default class UsageBar extends View {
   }
 
   open(provider) {
-    openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 440, height: 330 });
+    openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 480, height: provider === "cursor" ? 500 : 380 });
+  }
+
+  picker() {
+    const t = theme();
+    const enabled = enabledProviders();
+    return v_flex().size_full().p(16).gap(10).bg(t.chrome).text_size(12).text_color(t.foreground)
+      .child(h_flex().items_center().justify_between()
+        .child(div().font_semibold().text_size(15).child("Usage providers"))
+        .child(control("close-picker", "Close", () => closeOverlay(props().overlay), t)))
+      .child(div().text_color(t.muted).child("Choose which providers appear in the bar."))
+      .children(ORDER.map(provider => Button.new(`show-${provider}`).h_flex().items_center().gap(10)
+        .w_full().px(10).py(8).rounded(5).selected(enabled.includes(provider))
+        .bg(enabled.includes(provider) ? t.selected : t.surface).hover(s => s.bg(t.raised))
+        .accessibility_label(`Show ${NAMES[provider]}: ${enabled.includes(provider) ? "on" : "off"}`)
+        .child(div().w(16).child(enabled.includes(provider) ? "✓" : "○"))
+        .child(NAMES[provider]).on_click((_event, cx) => {
+          const before = enabledProviders();
+          const next = before.includes(provider) ? before.filter(name => name !== provider) : [...before, provider];
+          setShared(PROVIDERS, ORDER.filter(name => next.includes(name)));
+          if (!before.includes(provider)) this.refresh(provider, cx);
+          cx.notify();
+        })))
+      .child(div().text_size(11).text_color(t.dim).child("Choices are saved. Hidden providers stop automatic refresh."));
   }
 
   chip(provider, compact, t) {
@@ -93,7 +134,7 @@ export default class UsageBar extends View {
       .on_click(() => this.open(provider))
       .child(div().font_semibold().text_color(t.foreground).child(NAMES[provider]));
     if (!record) return chip.child(div().text_color(t.dim).child("…"));
-    if (!windows.length) return chip.child(div().text_color(t.dim).child("—"));
+    if (!windows.length) return chip.child(div().text_color(t.dim).child("!"));
     windows.forEach((w, index) => {
       if (index) chip.child(div().text_color(t.dim).child("·"));
       chip.child(div().text_color(t.muted).child(w.label));
@@ -106,7 +147,7 @@ export default class UsageBar extends View {
     const t = theme();
     const provider = this.detail;
     const record = shared(SNAPSHOT)?.[provider];
-    const body = v_flex().size_full().p(18).gap(14).bg(t.chrome)
+    const body = v_flex().id("usage-details").size_full().p(18).gap(12).bg(t.chrome).overflow_y_scrollbar()
       .text_size(12).text_color(t.foreground)
       .child(h_flex().items_center().justify_between()
         .child(div().text_size(16).font_semibold().child(`${NAMES[provider]} usage`))
@@ -127,21 +168,32 @@ export default class UsageBar extends View {
       body.child(div().text_size(11).text_color(t.dim)
         .child(`Updated ${new Date(record.updated * 1000).toLocaleTimeString()} · refreshes every 2 minutes`));
     } else {
-      body.child(div().text_color(t.muted).child(record?.error || "Reading usage…"));
+      body.child(div().font_semibold().text_color(t.working).child(ERRORS[record?.code] || "Usage unavailable"))
+        .child(div().text_color(t.muted).child(record?.error || "Reading usage…"));
+      if (record?.action) body.child(div().text_size(11.5).text_color(t.muted).child(record.action));
     }
     body.child(div().flex_1());
     const pending = ORDER.some(name => this.busy[name]);
     const actions = h_flex().gap(8).child(control("refresh-provider", pending ? "Refreshing…" : "Refresh all",
       (_event, cx) => this.refreshAll(cx), t).disabled(pending));
     if (provider === "claude" || provider === "cursor") {
-      actions.child(control("connect-provider", this.busy[provider] ? "Connecting…" : "Allow Keychain access",
+      actions.child(control("connect-provider", this.busy[provider] ? "Connecting…" : "Retry Keychain",
         (_event, cx) => this.refresh(provider, cx, true), t).disabled(Boolean(this.busy[provider]))
         .tooltip("Ask macOS to allow Python to read this provider's sign-in item. Automatic refresh never prompts."));
     }
-    return body.child(actions);
+    body.child(actions);
+    if (provider === "cursor") {
+      body.child(div().h(1).bg(t.border)).child(div().font_semibold().child("Connect without Keychain"))
+        .child(div().text_size(11.5).text_color(t.muted).child("In a signed-in cursor.com tab: DevTools → Application → Cookies → WorkosCursorSessionToken. Copy only its value, then click below."))
+        .child(control("copied-session", this.busy.cursor ? "Connecting…" : "Use copied browser session",
+          (_event, cx) => this.refresh("cursor", cx, false, true), t).disabled(Boolean(this.busy.cursor)))
+        .child(div().text_size(11).text_color(t.dim).child("Reads the clipboard only on click. Saves the validated session privately on this Mac for automatic refresh. Do not paste it into chat."));
+    }
+    return body;
   }
 
   render() {
+    if (this.settings) return this.picker();
     if (this.detail) return this.details();
     const t = theme();
     const compact = this.width < 700;
@@ -150,8 +202,14 @@ export default class UsageBar extends View {
       .on_size_change((size, cx) => {
         if (this.width !== size.width) { this.width = size.width; cx.notify(); }
       })
+      .child(Button.new("usage-provider-picker").size(24).flex_shrink_0().rounded(4).cursor_pointer()
+        .hover(s => s.bg(t.raised)).text_color(t.muted)
+        .child(svg("mods/usage-bar/tokens.svg").size(14))
+        .accessibility_label("Choose usage providers").tooltip("Choose which providers to display")
+        .on_click(() => openOverlay({ mod: "usage-bar", props: { settings: true }, kind: "popup", width: 310, height: 275 })))
       .child(h_flex().id("usage-providers").items_center().gap(2).flex_1().overflow_x_scroll()
-        .children(ORDER.map(provider => this.chip(provider, compact, t)))
+        .children(enabledProviders().map(provider => this.chip(provider, compact, t)))
+        .when(enabledProviders().length === 0, el => el.child(div().text_color(t.dim).px(6).child("Choose providers")))
         .child(Button.new("refresh-usage").px(8).h(24).flex_shrink_0().rounded(4).cursor_pointer()
           .text_color(t.muted).hover(s => s.bg(t.raised)).child("↻")
           .accessibility_label("Refresh usage for Codex, Claude and Cursor")
