@@ -1,5 +1,5 @@
 import { View, div, svg } from "gpui-kit";
-import { Button, h_flex, v_flex } from "gpui-base";
+import { Button, Checkbox, h_flex, v_flex } from "gpui-base";
 import { appHome, exec, theme, props, openOverlay, closeOverlay,
   shared, setShared, nextCommand } from "herdr";
 
@@ -7,6 +7,12 @@ const NAMES = { codex: "Codex", claude: "Claude", cursor: "Cursor" };
 const ORDER = ["codex", "claude", "cursor"];
 const SNAPSHOT = "usage-bar.snapshot";
 const PROVIDERS = "usage-bar.providers";
+const COUNTDOWNS = "usage-bar.countdowns";
+
+function showCountdown(provider) {
+  const saved = shared(COUNTDOWNS)?.[provider];
+  return typeof saved === "boolean" ? saved : provider !== "cursor";
+}
 
 function enabledProviders() {
   const saved = shared(PROVIDERS);
@@ -157,7 +163,7 @@ export default class UsageBar extends View {
       chip.child(div().text_color(t.muted).child(w.label));
       chip.child(div().text_color(usageColor(w.used, t)).child(percent(w.used)));
       const remaining = resetCountdown(w.reset);
-      if ((w.label === "5h" || w.label === "7d") && remaining) {
+      if (showCountdown(provider) && remaining) {
         chip.child(div().text_size(10.5).text_color(t.dim).child(`(${remaining})`));
       }
     });
@@ -197,6 +203,19 @@ export default class UsageBar extends View {
         .child(div().text_color(t.muted).child(record?.error || "Reading usage…"));
       if (record?.action) body.child(div().text_size(11.5).text_color(t.muted).child(record.action));
     }
+    const countdown = showCountdown(provider);
+    body.child(Checkbox.new(`countdown-${provider}`).h_flex().items_center().gap(8).py(6)
+      .cursor_pointer().checked(countdown).text_color(t.muted)
+      .accessibility_label(`Show ${NAMES[provider]} countdowns in bar`)
+      .child(div().size(14).flex_shrink_0().flex().items_center().justify_center().rounded(3)
+        .border(1).border_color(countdown ? t.accent : t.border)
+        .bg(countdown ? t.selected : t.surface).text_size(11).text_color(t.foreground)
+        .child(countdown ? "✓" : ""))
+      .child("Show countdowns in bar")
+      .on_change((checked, cx) => {
+        setShared(COUNTDOWNS, { ...(shared(COUNTDOWNS) || {}), [provider]: checked });
+        cx.notify();
+      }));
     body.child(div().flex_1());
     const pending = ORDER.some(name => this.busy[name]);
     const actions = h_flex().gap(8).child(control("refresh-provider", pending ? "Refreshing…" : "Refresh all",

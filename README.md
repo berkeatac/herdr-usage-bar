@@ -4,7 +4,7 @@ Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 
 ![Usage Bar](preview.png)
 
-Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. The bar shows reset countdowns beside 5h/7d percentages, such as `2h 15m` and `3d 12h`; popups also retain the exact reset timestamp. Countdowns update every minute without extra API calls. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
+Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. The bar shows reset countdowns beside 5h/7d percentages, such as `2h 15m` and `3d 12h`; popups also retain the exact reset timestamp. Each provider popup has a **Show countdowns in bar** checkbox, saved separately per provider. Codex/Claude default on; Cursor defaults off and can show its Total countdown when enabled. Popup reset details always remain visible. Countdowns update every minute without extra API calls. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
 
 ## Connecting providers
 

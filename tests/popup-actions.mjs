@@ -15,6 +15,7 @@ function element(id) {
         if (property === "child") target.nodes.push(args[0]);
         if (property === "children") target.nodes.push(...args[0]);
         if (property === "on_click") target.click = args[0];
+        if (property === "on_change") target.change = args[0];
         if (property === "disabled") target.disabled = args[0];
         return proxy;
       };
@@ -42,7 +43,7 @@ const source = fs.readFileSync(new URL("../mods/usage-bar/main.js", import.meta.
   .replace("export default class UsageBar", "globalThis.UsageBar = class UsageBar");
 const context = vm.createContext({
   View: class {}, div: () => element(), svg: () => element(), h_flex: () => element(), v_flex: () => element(),
-  Button: { new: id => element(id) }, theme: () => ({}),
+  Button: { new: id => element(id) }, Checkbox: { new: id => element(id) }, theme: () => ({}),
   props: () => ({ provider: settingsMode ? undefined : currentProvider, settings: settingsMode, overlay: "test" }),
   appHome: () => "/test", shared: key => snapshots.get(key),
   setShared: (key, value) => snapshots.set(key, value),
@@ -121,4 +122,26 @@ picker.render();
 controls.get("show-cursor").click({}, cx);
 await Promise.all(pending.splice(0));
 assert.ok(snapshots.get("usage-bar.providers").includes("cursor"), "picker should persist re-enabling a provider");
+settingsMode = false;
+currentProvider = "codex";
+snapshots.get("usage-bar.snapshot").codex.windows = [{ label: "5h", used: 22, reset: (Date.now() + 135 * 60000) / 1000 }];
+const codexPopup = new context.UsageBar();
+codexPopup.init({}, cx);
+codexPopup.details();
+controls.get("countdown-codex").change(false, cx);
+assert.equal(context.showCountdown("codex"), false);
+assert.equal(context.showCountdown("claude"), true, "provider countdown preferences must be independent");
+bar.chip("codex", false, {});
+assert.equal(controls.get("usage-codex").nodes.at(-1).nodeState.nodes[0], "22%", "unchecked countdown must disappear immediately");
+codexPopup.details();
+controls.get("countdown-codex").change(true, cx);
+bar.chip("codex", false, {});
+assert.equal(controls.get("usage-codex").nodes.at(-1).nodeState.nodes[0], "(2h 15m)");
+assert.equal(context.showCountdown("cursor"), false, "Cursor retains its existing default without a bar countdown");
+currentProvider = "cursor";
+popup.details();
+controls.get("countdown-cursor").change(true, cx);
+snapshots.get("usage-bar.snapshot").cursor.windows[0].reset = (Date.now() + 135 * 60000) / 1000;
+bar.chip("cursor", false, {});
+assert.equal(controls.get("usage-cursor").nodes.at(-1).nodeState.nodes[0], "(2h 15m)", "Cursor's checkbox must also control its Total countdown");
 console.log("Popup connect, progress, shared readings, and refresh callbacks passed (synthetic credentials).");
