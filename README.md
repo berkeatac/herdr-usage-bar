@@ -6,6 +6,8 @@ Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 
 Click the **token icon** to choose providers. Your choices are saved; hidden providers stop polling. The refresh arrow stays beside the displays. The bar shows reset countdowns beside 5h/7d percentages, such as `2h 15m` and `3d 12h`; popups also retain the exact reset timestamp. Each provider popup has a **Show countdowns in bar** checkbox, saved separately per provider. Codex/Claude default on; Cursor defaults off and can show its Total countdown when enabled. Popup reset details always remain visible. Countdowns update every minute without extra API calls. Percentages show **used** quota: current/weekly windows for Codex and Claude, Cursor's included billing-cycle Total. `!` means unavailable; click for the reason and next step.
 
+The Codex popup also shows remaining usage credits, separately from plan limits. It handles numeric balances (including zero), unlimited credits and unreported balances. Credits refresh with usage.
+
 ## Connecting providers
 
 Codex uses its existing CLI login. Claude uses its credentials file or Keychain login; **Retry Keychain** cannot create a login or activate a plan. Run `claude` and sign in if no subscription login exists. Errors distinguish missing login, expiry, denied access, missing scope, API rejection and plans without a supported quota. The mod does not guess whether a subscription is inactive.

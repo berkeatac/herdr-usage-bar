@@ -15,6 +15,22 @@ spec.loader.exec_module(collector)
 
 
 class QuotaTests(unittest.TestCase):
+    def test_codex_credits(self):
+        for raw, expected in [("1234.50", "1234.5"), ("0", "0"), (15, "15")]:
+            self.assertEqual(collector.parse_codex_credits({"credits": {"balance": raw}})["balance"], expected)
+        for raw in ["secret-token", "NaN", "Infinity", "-1", True, "1e10000"]:
+            self.assertIsNone(collector.parse_codex_credits({"credits": {"balance": raw}})["balance"])
+        self.assertIsNone(collector.parse_codex_credits({}))
+        self.assertTrue(collector.parse_codex_credits({"credits": {"unlimited": True}})["unlimited"])
+        self.assertIsNone(collector.parse_codex_credits({"credits": {}})["has_credits"])
+
+    def test_codex_credit_only_account(self):
+        credits = {"balance": "25", "has_credits": True, "unlimited": False}
+        with patch.object(collector, "codex", return_value={"windows": [], "credits": credits}):
+            result = collector.collect("codex")
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["credits"], credits)
+
     def test_codex_windows_and_zero(self):
         data = {"rate_limit": {"primary_window": {"used_percent": 0, "limit_window_seconds": 18000},
                                "secondary_window": {"used_percent": 47, "limit_window_seconds": 604800}}}

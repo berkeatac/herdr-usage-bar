@@ -3,6 +3,7 @@
 import argparse
 import base64
 import ctypes
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import math
@@ -146,6 +147,25 @@ def parse_codex(data):
     return windows
 
 
+def parse_codex_credits(data):
+    credits = data.get("credits")
+    if not isinstance(credits, dict):
+        return None
+    balance = credits.get("balance")
+    # Display up to two decimals; never forward arbitrary backend text to the UI.
+    normalized = None
+    if isinstance(balance, (str, int, float)) and not isinstance(balance, bool) and len(str(balance)) <= 64:
+        try:
+            value = Decimal(str(balance))
+            if value.is_finite() and 0 <= value <= Decimal("1e18"):
+                normalized = format(value, ".2f").rstrip("0").rstrip(".")
+        except InvalidOperation:
+            pass
+    has_credits = credits.get("has_credits")
+    return {"balance": normalized, "has_credits": has_credits if isinstance(has_credits, bool) else None,
+            "unlimited": credits.get("unlimited") is True}
+
+
 def codex(allow_prompt=False):
     root = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     tokens = load_json(root / "auth.json").get("tokens") or {}
@@ -155,7 +175,8 @@ def codex(allow_prompt=False):
     headers = {"Authorization": "Bearer " + token}
     if tokens.get("account_id"):
         headers["ChatGPT-Account-Id"] = tokens["account_id"]
-    return parse_codex(request("https://chatgpt.com/backend-api/wham/usage", headers))
+    data = request("https://chatgpt.com/backend-api/wham/usage", headers)
+    return {"windows": parse_codex(data), "credits": parse_codex_credits(data)}
 
 
 def parse_claude(data):
@@ -314,12 +335,17 @@ def cursor(allow_prompt=False):
 
 def collect(provider, allow_prompt=False, copied_session=False):
     try:
-        windows = (parse_cursor(save_copied_session()) if copied_session and provider == "cursor" else
+        reading = (parse_cursor(save_copied_session()) if copied_session and provider == "cursor" else
                    {"codex": codex, "claude": claude, "cursor": cursor}[provider](allow_prompt))
-        if not windows:
+        windows = reading.get("windows", []) if isinstance(reading, dict) else reading
+        credits = reading.get("credits") if isinstance(reading, dict) else None
+        if not windows and credits is None:
             raise Unavailable("The account responded, but did not report a supported subscription quota.", "no_quota",
                               "Check your plan on the provider's usage page. An inactive, API-only, unlimited or unsupported plan may have no percentage here.")
-        return {"provider": provider, "windows": windows, "updated": int(time.time()), "error": None}
+        result = {"provider": provider, "windows": windows, "updated": int(time.time()), "error": None}
+        if provider == "codex":
+            result["credits"] = credits
+        return result
     except Unavailable as e:
         return {"provider": provider, "windows": [], "updated": None, "error": str(e),
                 "code": e.code, "action": e.action}

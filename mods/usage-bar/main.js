@@ -120,7 +120,7 @@ export default class UsageBar extends View {
   open(provider) {
     const connected = Boolean(shared(SNAPSHOT)?.[provider]?.windows?.length);
     openOverlay({ mod: "usage-bar", props: { provider }, kind: "popup", width: 480,
-      height: provider === "cursor" ? (connected ? 320 : 500) : 380 });
+      height: provider === "cursor" ? (connected ? 320 : 500) : provider === "codex" ? 450 : 380 });
   }
 
   picker() {
@@ -174,7 +174,7 @@ export default class UsageBar extends View {
     const t = theme();
     const provider = this.detail;
     const record = shared(SNAPSHOT)?.[provider];
-    const connected = Boolean(record?.windows?.length);
+    const connected = Boolean(record?.windows?.length || (provider === "codex" && record?.credits));
     const body = v_flex().id("usage-details").size_full().p(18).gap(12).bg(t.chrome).overflow_y_scrollbar()
       .text_size(12).text_color(t.foreground)
       .child(h_flex().items_center().justify_between()
@@ -195,6 +195,19 @@ export default class UsageBar extends View {
           .when(Boolean(remaining), el => el.child(div().text_size(11.5).text_color(t.muted)
             .child(remaining === "Reset pending" ? remaining : `Resets in ${remaining}`)))
           .child(div().text_size(11).text_color(t.dim).child(resetText(w.reset))));
+      }
+      if (provider === "codex") {
+        const credits = record.credits;
+        const balance = credits?.unlimited ? "Unlimited"
+          : credits?.balance != null ? `${credits.balance} credits`
+          : credits?.has_credits ? "Available · balance not reported"
+          : credits?.has_credits === false ? "No remaining credits" : "Not reported";
+        body.child(v_flex().gap(5)
+          .child(h_flex().justify_between()
+            .child(div().child("Credits remaining"))
+            .child(div().font_semibold().child(balance)))
+          .child(div().text_size(11).text_color(t.muted)
+            .child("Additional usage credits, separate from your plan’s rolling limits.")));
       }
       body.child(div().text_size(11).text_color(t.dim)
         .child(`Updated ${new Date(record.updated * 1000).toLocaleTimeString()} · refreshes every 2 minutes`));

@@ -144,4 +144,21 @@ controls.get("countdown-cursor").change(true, cx);
 snapshots.get("usage-bar.snapshot").cursor.windows[0].reset = (Date.now() + 135 * 60000) / 1000;
 bar.chip("cursor", false, {});
 assert.equal(controls.get("usage-cursor").nodes.at(-1).nodeState.nodes[0], "(2h 15m)", "Cursor's checkbox must also control its Total countdown");
+function textOf(node) {
+  return typeof node === "string" ? node : (node?.nodeState?.nodes || []).map(textOf).join(" ");
+}
+currentProvider = "codex";
+for (const [credits, expected] of [
+  [{ balance: "1234.5", has_credits: true }, "1234.5 credits"],
+  [{ balance: "0", has_credits: false }, "0 credits"],
+  [{ unlimited: true }, "Unlimited"],
+  [{ has_credits: true }, "Available · balance not reported"],
+  [{ has_credits: false }, "No remaining credits"],
+  [null, "Not reported"],
+]) {
+  snapshots.get("usage-bar.snapshot").codex.credits = credits;
+  assert.ok(textOf(codexPopup.details()).includes(expected), `Codex credits should show ${expected}`);
+}
+bar.open("codex");
+assert.equal(overlays.at(-1).height, 450, "Codex popup needs room for credits");
 console.log("Popup connect, progress, shared readings, and refresh callbacks passed (synthetic credentials).");
