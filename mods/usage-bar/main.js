@@ -260,6 +260,7 @@ export default class UsageBar extends View {
       .on_size_change((size, cx) => {
         if (this.width !== size.width) { this.width = size.width; cx.notify(); }
       })
+      .when(workspaceStatus, el => el.child(this.workspaceStatus(t)))
       .child(Button.new("usage-provider-picker").size(24).flex_shrink_0().rounded(4).cursor_pointer()
         .hover(s => s.bg(t.raised)).text_color(t.muted)
         .child(svg("mods/usage-bar/tokens.svg").size(14))
@@ -274,7 +275,10 @@ export default class UsageBar extends View {
           .accessibility_label("Refresh usage for Codex, Claude and Cursor")
           .tooltip("Refresh usage · automatic refresh every 2 minutes")
           .on_click((_event, cx) => this.refreshAll(cx))))
-      .when(workspaceStatus, el => el.child(this.workspaceStatus(t)))
+      .when(workspaceStatus, el => el.child(div().flex_1()))
+      .when(workspaceStatus && this.width > 900, el => el.child(Button.new("usage-commands").pr(8).text_color(t.dim)
+        .on_click(() => run("app.palette"))
+        .child(`${window()?.platform === "macos" ? "⌘" : "Ctrl"} Shift P  commands`)))
       .when(!workspaceStatus && this.width > 760, el => el.child(div().px(8).text_color(t.dim).child("quota used")));
   }
 
@@ -284,16 +288,12 @@ export default class UsageBar extends View {
     const needs = list.filter(agent => agent.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().flex_shrink_0()
       .child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    return h_flex().id("usage-workspace-status").flex_1().min_w(0).pl(10).pr(8).gap(16)
+    return h_flex().id("usage-workspace-status").flex_shrink_0().pl(8).pr(10).gap(16)
       .items_center().text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(space?.branch), el => el.child(label("branch", space.branch)))
       .child(h_flex().gap(6).items_center().flex_shrink_0()
         .child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
-        .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
-      .child(div().flex_1())
-      .when(this.width > 900, el => el.child(Button.new("usage-commands").text_color(t.dim)
-        .on_click(() => run("app.palette"))
-        .child(`${window()?.platform === "macos" ? "⌘" : "Ctrl"} Shift P  commands`)));
+        .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))));
   }
 }
