@@ -14,6 +14,7 @@ Codex, Claude and Cursor subscription usage on the left of your bottom bar.
 - **Local sign-ins and Keychain:** reuse existing provider credentials, with an explicit **Retry Keychain** action for Claude and Cursor on macOS. Connected providers hide their connection controls.
 - **Cursor browser connection:** explicitly connect using a copied browser session if Keychain is unavailable.
 - **Refresh:** the refresh arrow stays next to the provider displays. Automatic refresh runs every two minutes; popups also offer **Refresh all**.
+- **Rate-limit back-off:** after an HTTP 429, a 5xx or a network failure, automatic refresh for that provider waits two minutes, doubling up to 32 (or longer when the provider's `Retry-After` asks, capped at six hours), and keeps showing the last good reading marked **stale** with the next automatic try time. The refresh arrow and **Refresh all** always try immediately.
 - **Useful errors:** click `!` for the reason and a next step, including missing login, expired credentials, denied access or unsupported quotas.
 
 The screenshot shows the selected Codex and Cursor providers; Claude can be enabled from the token icon.

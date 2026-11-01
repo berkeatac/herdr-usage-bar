@@ -3,7 +3,9 @@
 import argparse
 import base64
 import ctypes
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import math
@@ -19,10 +21,35 @@ import urllib.request
 
 
 class Unavailable(Exception):
-    def __init__(self, message, code="unavailable", action=None):
+    def __init__(self, message, code="unavailable", action=None, retry_after=None):
         super().__init__(message)
         self.code = code
         self.action = action
+        self.retry_after = retry_after
+
+
+# A hostile or broken Retry-After must not park a provider for longer than this.
+RETRY_AFTER_MAX = 6 * 3600
+# Anthropic's x-should-retry: false on a 429/5xx with no Retry-After: wait the full back-off cap.
+NO_RETRY_WAIT = 32 * 60
+
+
+def retry_after(headers):
+    """Seconds the server asked to wait (delta-seconds or HTTP-date), clamped; None if absent or invalid."""
+    value = (headers.get("Retry-After") or "").strip() if headers else ""
+    if not value:
+        return None
+    if value.isdigit():
+        seconds = int(value)
+    else:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        seconds = when.timestamp() - time.time()
+    return int(min(max(seconds, 0), RETRY_AFTER_MAX))
 
 
 def number(value):
@@ -70,8 +97,17 @@ def request(url, headers, body=None):
         if e.code == 403:
             raise Unavailable("The provider refused access to usage (HTTP 403).", "forbidden",
                               "Check the account's subscription and usage permissions. This response alone does not confirm an inactive subscription.")
+        # Only 429 and 5xx are transient; other statuses stay non-transient errors.
+        transient = e.code == 429 or 500 <= e.code <= 599
+        wait = retry_after(e.headers) if transient else None
+        if transient and wait is None and (e.headers.get("x-should-retry") or "").strip().lower() == "false":
+            wait = NO_RETRY_WAIT
         if e.code == 429:
-            raise Unavailable("The provider is rate limiting usage requests (HTTP 429).", "rate_limited", "Wait a few minutes, then refresh.")
+            raise Unavailable("The provider is rate limiting usage requests (HTTP 429).", "rate_limited",
+                              "Automatic refresh backs off and honors the provider's Retry-After; ↻ retries now.", wait)
+        if transient:
+            raise Unavailable("Provider returned HTTP " + str(e.code) + ".", "http_error",
+                              "Automatic refresh backs off; ↻ retries now.", wait)
         raise Unavailable("Provider returned HTTP " + str(e.code) + ".")
     except (urllib.error.URLError, TimeoutError, socket.timeout, OSError):
         raise Unavailable("The usage service could not be reached.", "offline", "Check your connection, then refresh.")
@@ -407,7 +443,7 @@ def collect(provider, allow_prompt=False, copied_session=False):
         return result
     except Unavailable as e:
         return {"provider": provider, "windows": [], "updated": None, "error": str(e),
-                "code": e.code, "action": e.action}
+                "code": e.code, "action": e.action, "retry_after": e.retry_after}
     except Exception:
         # Never echo exceptions containing request URLs, headers or credential values.
         return {"provider": provider, "windows": [], "updated": None,

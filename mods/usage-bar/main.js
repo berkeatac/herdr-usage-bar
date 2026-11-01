@@ -8,6 +8,37 @@ const ORDER = ["codex", "claude", "cursor"];
 const SNAPSHOT = "usage-bar.snapshot";
 const PROVIDERS = "usage-bar.providers";
 const COUNTDOWNS = "usage-bar.countdowns";
+// Back-off: per provider { failures, until }, shared so popups and restarts see it.
+const BACKOFF = "usage-bar.backoff";
+const POLL_MS = 120000;
+const BACKOFF_MAX_MS = 32 * 60000;
+// Network failures worth backing off on; sign-in/Keychain errors clear the reading as before.
+const TRANSIENT = new Set(["rate_limited", "offline", "http_error"]);
+// Per provider, the newest read's number; older reads finishing later are discarded.
+const GENERATION = "usage-bar.generation";
+
+// Longest wait we ever set: the 6h Retry-After clamp (collect.py) with slack. Anything
+// else in persisted state is malformed and ignored rather than parking a provider.
+const BACKOFF_LIMIT_MS = 6 * 3600000 + 60000;
+
+function backingOff(provider) {
+  const until = shared(BACKOFF)?.[provider]?.until;
+  return typeof until === "number" && Number.isFinite(until)
+    && Date.now() < until && until - Date.now() <= BACKOFF_LIMIT_MS;
+}
+
+// A reading worth keeping as stale: quota windows, or Codex credits (as `connected` counts them).
+function hasReading(record) {
+  return Boolean(record?.windows?.length || (record?.provider === "codex" && record?.credits));
+}
+
+// "14:05 (in 4m)": the countdown disambiguates times past midnight.
+function clock(seconds) {
+  const d = new Date(seconds * 1000);
+  const time = `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const left = resetCountdown(seconds);
+  return left && left !== "Reset pending" ? `${time} (in ${left})` : time;
+}
 
 function showCountdown(provider) {
   const saved = shared(COUNTDOWNS)?.[provider];
@@ -22,7 +53,8 @@ function enabledProviders() {
 const ERRORS = {
   not_signed_in: "Not signed in", expired: "Sign-in expired", forbidden: "Usage access refused",
   missing_scope: "Usage permission missing", no_quota: "No quota reported", offline: "Offline",
-  rate_limited: "Try again later", keychain_locked: "Keychain locked",
+  rate_limited: "Try again later", http_error: "Provider error", backoff: "Backing off",
+  keychain_locked: "Keychain locked",
   keychain_missing: "Sign-in key missing",
   keychain_denied: "Keychain access denied", keychain_error: "Keychain unavailable",
   cancelled: "Request cancelled", invalid_session: "Session not connected", reader_error: "Reader error",
@@ -80,13 +112,27 @@ export default class UsageBar extends View {
     // Countdown data changes by the minute; this does not fetch provider usage.
     if (!this.settings) cx.timer.every(60000, cx => cx.notify());
     if (this.detail || this.settings) return;
-    setShared(SNAPSHOT, {});
+    // Clear old readings on start, except for providers still backing off from before a
+    // restart or layout switch: they are skipped below, so keep their last reading (stale)
+    // or say why they wait, instead of showing "…" until the back-off ends.
+    const old = shared(SNAPSHOT) || {};
+    const kept = {};
+    for (const provider of enabledProviders()) {
+      if (!backingOff(provider)) continue;
+      const retry_at = Math.round(shared(BACKOFF)[provider].until / 1000);
+      const error = old[provider]?.error || "Waiting before the next automatic read.";
+      const code = old[provider]?.code || "backoff";
+      kept[provider] = hasReading(old[provider])
+        ? { ...old[provider], stale: true, error, code, retry_at }
+        : { provider, windows: [], updated: null, error, code, action: old[provider]?.action, retry_at };
+    }
+    setShared(SNAPSHOT, kept);
     this.refreshAll(cx);
-    cx.timer.every(120000, cx => this.refreshAll(cx));
+    cx.timer.every(POLL_MS, cx => this.refreshAll(cx));
     cx.spawn(async cx => {
       for (;;) {
         const command = await nextCommand();
-        if (command === "refresh") this.refreshAll(cx);
+        if (command === "refresh") this.refreshAll(cx, true);
         const provider = command.replace("connect-", "");
         if (command.startsWith("connect-") && ORDER.includes(provider)) {
           this.refresh(provider, cx, true);
@@ -95,14 +141,22 @@ export default class UsageBar extends View {
     });
   }
 
-  refreshAll(cx) {
-    for (const provider of enabledProviders()) this.refresh(provider, cx);
+  // Automatic reads skip providers still backing off; manual ones (↻, Refresh all) always go.
+  refreshAll(cx, manual = false) {
+    for (const provider of enabledProviders()) {
+      if (manual || !backingOff(provider)) this.refresh(provider, cx);
+    }
   }
 
   refresh(provider, cx, allowKeychain = false, copiedSession = false) {
     if (this.busy[provider]) return;
     this.busy[provider] = true;
     cx.notify();
+    // The bar and its popups each have their own `busy`, so two reads can overlap.
+    // Only the newest may publish, or a slow old 429 could stale a fresh reading.
+    const last = shared(GENERATION)?.[provider];
+    const gen = (Number.isSafeInteger(last) && last >= 0 ? last : 0) + 1;
+    setShared(GENERATION, { ...(shared(GENERATION) || {}), [provider]: gen });
     cx.spawn(async cx => {
       try {
         const args = [`${appHome()}/mods/usage-bar/collect.py`, provider];
@@ -119,9 +173,36 @@ export default class UsageBar extends View {
           action: "Check that Python 3 is available. A long-running permission dialog can also time out; close it and retry." };
       }
       this.busy[provider] = false;
+      // Discarded: no notify, since this view (e.g. a closed popup) may be gone and cx would throw.
+      if (shared(GENERATION)?.[provider] !== gen) return;
+      this.records[provider] = this.applyBackoff(provider, this.records[provider]);
       setShared(SNAPSHOT, { ...(shared(SNAPSHOT) || {}), [provider]: this.records[provider] });
       cx.notify();
     });
+  }
+
+  // Transient failure: wait max(Retry-After, 2m doubling to 32m) and keep the last good
+  // numbers marked stale. Success or any other error resets the back-off.
+  applyBackoff(provider, record) {
+    const backoff = { ...(shared(BACKOFF) || {}) };
+    if (record.error && TRANSIENT.has(record.code)) {
+      const prior = backoff[provider]?.failures;
+      const failures = (Number.isSafeInteger(prior) && prior > 0 ? prior : 0) + 1;
+      const delay = Math.max((record.retry_after || 0) * 1000,
+        Math.min(POLL_MS * 2 ** (failures - 1), BACKOFF_MAX_MS));
+      backoff[provider] = { failures, until: Date.now() + delay };
+      setShared(BACKOFF, backoff);
+      const retry_at = Math.round((Date.now() + delay) / 1000);
+      const previous = shared(SNAPSHOT)?.[provider];
+      return hasReading(previous)
+        ? { ...previous, stale: true, error: record.error, code: record.code, action: record.action, retry_at }
+        : { ...record, retry_at };
+    }
+    if (backoff[provider]) {
+      delete backoff[provider];
+      setShared(BACKOFF, backoff);
+    }
+    return record;
   }
 
   open(provider) {
@@ -156,8 +237,12 @@ export default class UsageBar extends View {
   chip(provider, compact, t) {
     const record = shared(SNAPSHOT)?.[provider] || this.records[provider];
     const windows = record?.windows || [];
-    const title = `${NAMES[provider]} usage — ${record?.error || windows.map(w =>
-      `${w.label}: ${percent(w.used)} used. ${resetCountdown(w.reset) || "Countdown unavailable"}. ${resetText(w.reset)}`).join("; ") || "Loading"}. Click for details.`;
+    const readings = windows.map(w =>
+      `${w.label}: ${percent(w.used)} used. ${resetCountdown(w.reset) || "Countdown unavailable"}. ${resetText(w.reset)}`).join("; ");
+    const next = record?.retry_at ? ` Next automatic try at ${clock(record.retry_at)}.` : "";
+    const title = `${NAMES[provider]} usage — ${record?.stale
+      ? `${readings}. Last good reading; ${record.error}${next}`
+      : record?.error ? record.error + next : readings || "Loading"}. Click for details.`;
     const chip = Button.new(`usage-${provider}`).h_flex().items_center().gap(compact ? 5 : 7)
       .h(24).px(compact ? 6 : 8).rounded(4).flex_shrink_0().cursor_pointer()
       .hover(s => s.bg(t.raised)).accessibility_label(title).tooltip(title)
@@ -168,12 +253,13 @@ export default class UsageBar extends View {
     windows.forEach((w, index) => {
       if (index) chip.child(div().text_color(t.dim).child("·"));
       chip.child(div().text_color(t.muted).child(w.label));
-      chip.child(div().text_color(usageColor(w.used, t)).child(percent(w.used)));
+      chip.child(div().text_color(record.stale ? t.dim : usageColor(w.used, t)).child(percent(w.used)));
       const remaining = resetCountdown(w.reset);
       if (showCountdown(provider) && remaining) {
         chip.child(div().text_size(10.5).text_color(t.dim).child(`(${remaining})`));
       }
     });
+    if (record.stale) chip.child(div().text_size(10.5).text_color(t.working).child("stale"));
     return chip;
   }
 
@@ -218,10 +304,15 @@ export default class UsageBar extends View {
       }
       body.child(div().text_size(11).text_color(t.dim)
         .child(`Updated ${new Date(record.updated * 1000).toLocaleTimeString()} · refreshes every 2 minutes`));
+      if (record.stale) {
+        body.child(div().text_size(11.5).text_color(t.working)
+          .child(`Showing the last good reading. ${record.error}${record.retry_at ? ` Next automatic try at ${clock(record.retry_at)}.` : ""}`));
+      }
     } else {
       body.child(div().font_semibold().text_color(t.working).child(ERRORS[record?.code] || "Usage unavailable"))
         .child(div().text_color(t.muted).child(record?.error || "Reading usage…"));
       if (record?.action) body.child(div().text_size(11.5).text_color(t.muted).child(record.action));
+      if (record?.retry_at) body.child(div().text_size(11.5).text_color(t.muted).child(`Next automatic try at ${clock(record.retry_at)}.`));
     }
     const countdown = showCountdown(provider);
     body.child(Checkbox.new(`countdown-${provider}`).h_flex().items_center().gap(8).py(6)
@@ -239,7 +330,7 @@ export default class UsageBar extends View {
     body.child(div().flex_1());
     const pending = ORDER.some(name => this.busy[name]);
     const actions = h_flex().gap(8).child(control("refresh-provider", pending ? "Refreshing…" : "Refresh all",
-      (_event, cx) => this.refreshAll(cx), t).disabled(pending));
+      (_event, cx) => this.refreshAll(cx, true), t).disabled(pending));
     if (!connected && (provider === "claude" || provider === "cursor")) {
       actions.child(control("connect-provider", this.busy[provider] ? "Connecting…" : "Retry Keychain",
         (_event, cx) => this.refresh(provider, cx, true), t).disabled(Boolean(this.busy[provider]))
@@ -280,8 +371,8 @@ export default class UsageBar extends View {
         .child(Button.new("refresh-usage").px(8).h(24).flex_shrink_0().rounded(4).cursor_pointer()
           .text_color(t.muted).hover(s => s.bg(t.raised)).child("↻")
           .accessibility_label("Refresh usage for Codex, Claude and Cursor")
-          .tooltip("Refresh usage · automatic refresh every 2 minutes")
-          .on_click((_event, cx) => this.refreshAll(cx))))
+          .tooltip("Refresh usage now · automatic refresh every 2 minutes, backing off after failures")
+          .on_click((_event, cx) => this.refreshAll(cx, true))))
       .when(workspaceStatus, el => el.child(div().flex_1()))
       .when(workspaceStatus && this.width > 900, el => el.child(Button.new("usage-commands").pr(8).text_color(t.dim)
         .on_click(() => run("app.palette"))
