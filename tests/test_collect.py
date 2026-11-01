@@ -136,5 +136,53 @@ class QuotaTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
 
+class ClaudeKeychainTests(unittest.TestCase):
+    SIGNED_IN = json.dumps({"claudeAiOauth": {"accessToken": "synthetic-token"}})
+
+    def security(self, answers):
+        """A fake /usr/bin/security: answers maps the -a account (or None) to (returncode, stdout)."""
+        calls = []
+        def run(args, **kwargs):
+            calls.append(args)
+            account = args[args.index("-a") + 1] if "-a" in args else None
+            code, out = answers.get(account, (44, ""))
+            return SimpleNamespace(returncode=code, stdout=out.encode())
+        return calls, run
+
+    def test_reads_users_item_through_security_without_python_keychain(self):
+        calls, run = self.security({"person": (0, self.SIGNED_IN + "\n")})
+        with patch.object(collector.sys, "platform", "darwin"), \
+             patch.dict(collector.os.environ, {"USER": "person"}), \
+             patch.object(collector.subprocess, "run", side_effect=run), \
+             patch.object(collector, "keychain", side_effect=AssertionError("Python Keychain read should not be needed")):
+            self.assertEqual(collector.claude_keychain(), self.SIGNED_IN)
+        self.assertEqual(calls[0], ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-a", "person", "-w"])
+
+    def test_skips_an_item_without_a_token(self):
+        calls, run = self.security({"person": (0, json.dumps({"mcpOAuth": {}})), None: (0, self.SIGNED_IN)})
+        with patch.object(collector.sys, "platform", "darwin"), \
+             patch.dict(collector.os.environ, {"USER": "person"}), \
+             patch.object(collector.subprocess, "run", side_effect=run), \
+             patch.object(collector, "keychain", side_effect=AssertionError("Python Keychain read should not be needed")):
+            self.assertEqual(collector.claude_keychain(), self.SIGNED_IN)
+        self.assertNotIn("-a", calls[1])
+
+    def test_falls_back_to_security_framework(self):
+        _, run = self.security({})
+        with patch.object(collector.sys, "platform", "darwin"), \
+             patch.object(collector.subprocess, "run", side_effect=run), \
+             patch.object(collector, "keychain", return_value=self.SIGNED_IN) as framework:
+            self.assertEqual(collector.claude_keychain(allow_prompt=True), self.SIGNED_IN)
+        framework.assert_called_once_with("Claude Code-credentials", allow_prompt=True)
+
+    def test_security_failures_are_quiet(self):
+        with patch.object(collector.sys, "platform", "darwin"), \
+             patch.object(collector.subprocess, "run", side_effect=OSError("missing")):
+            self.assertIsNone(collector.security_password("Claude Code-credentials"))
+        with patch.object(collector.sys, "platform", "linux"), \
+             patch.object(collector.subprocess, "run", side_effect=AssertionError("not on Linux")):
+            self.assertIsNone(collector.security_password("Claude Code-credentials"))
+
+
 if __name__ == "__main__":
     unittest.main()

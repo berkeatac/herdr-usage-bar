@@ -110,6 +110,38 @@ def keychain(service, account=None, allow_prompt=False):
         sec.SecKeychainItemFreeContent(None, data)
 
 
+def security_password(service, account=None):
+    """Read a generic password through /usr/bin/security, as Herdr UI does. Items that `security` itself wrote
+    (Claude Code's sign-in) trust it, so macOS answers without a prompt. None when it cannot be read that way."""
+    if sys.platform != "darwin":
+        return None
+    args = ["/usr/bin/security", "find-generic-password", "-s", service]
+    if account:
+        args += ["-a", account]
+    try:
+        result = subprocess.run(args + ["-w"], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8").rstrip("\n") or None
+
+
+def claude_keychain(allow_prompt=False):
+    """Claude Code's sign-in: the user's own item first (a `sudo claude` item under root can come first by service
+    alone), then any item of the service, then the Security framework path that may need Keychain permission."""
+    service = "Claude Code-credentials"
+    for account in (os.environ.get("USER"), None):
+        raw = security_password(service, account)
+        if raw:
+            try:
+                if (json.loads(raw).get("claudeAiOauth") or {}).get("accessToken"):
+                    return raw
+            except ValueError:
+                pass
+    return keychain(service, allow_prompt=allow_prompt)
+
+
 def decrypt_cursor(value, allow_prompt=False):
     if not value.startswith("cursor-safe-storage:"):
         return value
@@ -199,7 +231,7 @@ def claude(allow_prompt=False):
     credentials = load_json(root / ".credentials.json")
     if not credentials.get("claudeAiOauth") and "CLAUDE_CONFIG_DIR" not in os.environ:
         try:
-            raw = keychain("Claude Code-credentials", allow_prompt=allow_prompt)
+            raw = claude_keychain(allow_prompt)
         except Unavailable as error:
             if error.code == "keychain_missing":
                 raise Unavailable("No Claude Code subscription sign-in was found on this Mac.", "not_signed_in",

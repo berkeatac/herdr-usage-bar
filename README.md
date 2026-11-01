@@ -53,7 +53,7 @@ For manual installation, copy only `mods/usage-bar/` to `~/.config/herdr-app/mod
 
 **Codex:** uses the existing CLI login in `$CODEX_HOME/auth.json` or `~/.codex/auth.json`. Run `codex login` if necessary. API-key accounts do not provide subscription quota here.
 
-**Claude:** uses its credentials file or macOS Keychain login. Run `claude` and sign in if no subscription login exists. **Retry Keychain** can request access to a saved login; granting access does not create a login or activate a plan.
+**Claude:** uses its credentials file or macOS Keychain login. On macOS the Keychain item is read with `/usr/bin/security`, which Claude Code itself uses to save it, so no Keychain permission prompt is needed. Run `claude` and sign in if no subscription login exists. **Retry Keychain** can request access to a saved login; granting access does not create a login or activate a plan.
 
 **Cursor:** tries its independent CLI login before desktop-token decryption. Run `cursor-agent login` if needed, or use **Retry Keychain** in the popup. If Keychain remains unavailable:
 
