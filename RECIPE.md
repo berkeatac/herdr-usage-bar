@@ -28,6 +28,8 @@ Popup actions run directly in that popup's copy. Show Connecting… or Refreshin
 
 Automatic Keychain reads never prompt. Retry Keychain explicitly permits a macOS prompt, which the person handles. Differentiate missing keys, locked Keychain, denied access, cancellation, missing account sign-in, expired credentials, missing usage scope, HTTP 401, HTTP 403, rate limits, network errors and successful responses without quota. A permission grant is not a login, and an inaccessible credential does not establish an inactive subscription.
 
+HTTP 429, 5xx and network failures are transient: return `retry_after` seconds from a `Retry-After` header (delta-seconds or HTTP-date, clamped to six hours), or 32 minutes for Anthropic's `x-should-retry: false` without one. Automatic refresh then skips that provider for max(retry_after, 2 minutes doubling per consecutive failure up to 32), shared so popups and restarts see it, and keeps the last good reading marked stale with the next try time. Manual refresh always reads. Any other result resets the back-off. Only the newest read for a provider may publish, so a slow older failure cannot overwrite a fresh reading.
+
 Cursor's copied-session action reads the clipboard only when clicked. Instructions identify cursor.com's WorkosCursorSessionToken cookie value in browser DevTools. Validate its JWT expiry and subject, check it with Cursor, and save only an accepted session in an owner-only local file for subsequent automatic refresh. Invalid clipboard contents must never be echoed or saved. Ordinary refresh never reads the clipboard. Never ask the person to paste credentials into chat.
 
 ## Built from

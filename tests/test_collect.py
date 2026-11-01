@@ -136,5 +136,56 @@ class QuotaTests(unittest.TestCase):
             self.assertFalse(path.exists())
 
 
+def http_error(code, headers=None):
+    from email.message import Message
+    import urllib.error
+    message = Message()
+    for name, value in (headers or {}).items():
+        message[name] = value
+    return urllib.error.HTTPError("https://example.invalid/usage", code, "error", message, None)
+
+
+class RetryAfterTests(unittest.TestCase):
+    def failure(self, code, headers=None):
+        opener = SimpleNamespace(open=lambda *args, **kwargs: (_ for _ in ()).throw(http_error(code, headers)))
+        with patch.object(collector.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(collector.Unavailable) as caught:
+                collector.request("https://example.invalid/usage", {})
+        return caught.exception
+
+    def test_retry_after_seconds_and_dates(self):
+        self.assertEqual(collector.retry_after({"Retry-After": "120"}), 120)
+        when = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() + 600))
+        self.assertAlmostEqual(collector.retry_after({"Retry-After": when}), 600, delta=5)
+        past = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() - 600))
+        self.assertEqual(collector.retry_after({"Retry-After": past}), 0)
+
+    def test_retry_after_is_clamped_and_ignores_garbage(self):
+        self.assertEqual(collector.retry_after({"Retry-After": "999999999"}), collector.RETRY_AFTER_MAX)
+        self.assertIsNone(collector.retry_after({"Retry-After": "soon"}))
+        self.assertIsNone(collector.retry_after({}))
+        self.assertIsNone(collector.retry_after(None))
+
+    def test_rate_limit_carries_retry_after(self):
+        error = self.failure(429, {"Retry-After": "300"})
+        self.assertEqual((error.code, error.retry_after), ("rate_limited", 300))
+
+    def test_should_not_retry_waits_the_full_backoff(self):
+        error = self.failure(429, {"x-should-retry": "false"})
+        self.assertEqual(error.retry_after, collector.NO_RETRY_WAIT)
+
+    def test_server_errors_are_transient(self):
+        error = self.failure(503, {"Retry-After": "60"})
+        self.assertEqual((error.code, error.retry_after), ("http_error", 60))
+
+    def test_other_statuses_stay_non_transient(self):
+        error = self.failure(404, {"Retry-After": "60"})
+        self.assertEqual((error.code, error.retry_after), ("unavailable", None))
+
+    def test_collect_reports_retry_after(self):
+        with patch.object(collector, "claude", side_effect=collector.Unavailable("slow down", "rate_limited", None, 90)):
+            self.assertEqual(collector.collect("claude")["retry_after"], 90)
+
+
 if __name__ == "__main__":
     unittest.main()
